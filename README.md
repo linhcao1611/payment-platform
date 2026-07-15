@@ -25,6 +25,7 @@ npm run dev
 - API: http://localhost:5080 (Swagger at `/swagger`)
 - Dashboard: http://localhost:5173
 - Metrics: http://localhost:5080/metrics — Health: `/healthz`, `/readyz`
+- Postgres: `localhost:5433` (host port 5433 to avoid clashing with a local Postgres on 5432)
 
 ```bash
 # Run tests
