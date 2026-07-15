@@ -1,17 +1,26 @@
 using System.Diagnostics;
 using System.Net;
+using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace Payments.Api.Tests;
 
 /// <summary>
-/// The async leg. These use the host that has the settlement worker running, so the
-/// assertions are about what the system converges on rather than what one request returns.
+/// The async leg. Assertions here are about what the system converges on rather than what one
+/// request returns.
+///
+/// Each test runs a worker on its own database. Sharing one would mean every other test in the
+/// suite has a background thread quietly settling its payments, which turns any exact-audit-
+/// trail assertion into a race against the machine's speed.
 /// </summary>
 [Collection(nameof(PaymentsApiCollection))]
 public class SettlementTests(PaymentsApiFixture fixture)
 {
-    private PaymentsApiClient NewMerchant() =>
-        PaymentsApiClient.For(fixture.ApiWithWorker.CreateClient(), $"m-{Guid.NewGuid():N}");
+    /// <summary>A host whose worker is the only thing polling its (private) queue.</summary>
+    private async Task<WebApplicationFactory<Program>> WorkerHostAsync() =>
+        fixture.CreateHost(await fixture.CreateIsolatedDatabaseAsync(), workerEnabled: true);
+
+    private static PaymentsApiClient ClientFor(WebApplicationFactory<Program> host) =>
+        PaymentsApiClient.For(host.CreateClient(), $"m-{Guid.NewGuid():N}");
 
     /// <summary>
     /// Polls instead of sleeping a fixed duration: a fixed sleep is either flaky or slow, and
@@ -40,7 +49,8 @@ public class SettlementTests(PaymentsApiFixture fixture)
     [Fact]
     public async Task A_captured_payment_settles_itself()
     {
-        var api = NewMerchant();
+        await using var host = await WorkerHostAsync();
+        var api = ClientFor(host);
         var payment = await api.CreateAuthorized();
 
         await api.CaptureRaw(payment.Id, Guid.NewGuid().ToString());
@@ -68,7 +78,8 @@ public class SettlementTests(PaymentsApiFixture fixture)
     [Fact]
     public async Task The_capture_request_id_flows_onto_settlement_even_when_the_client_supplies_it()
     {
-        var api = NewMerchant();
+        await using var host = await WorkerHostAsync();
+        var api = ClientFor(host);
         var payment = await api.CreateAuthorized();
 
         var correlationId = $"trace-{Guid.NewGuid():N}";
@@ -91,7 +102,8 @@ public class SettlementTests(PaymentsApiFixture fixture)
     [Fact]
     public async Task Refund_after_settle_is_allowed()
     {
-        var api = NewMerchant();
+        await using var host = await WorkerHostAsync();
+        var api = ClientFor(host);
         var payment = await api.CreateAuthorized();
         await api.CaptureRaw(payment.Id, Guid.NewGuid().ToString());
         await WaitForStatus(api, payment.Id, "Settled");
@@ -107,22 +119,34 @@ public class SettlementTests(PaymentsApiFixture fixture)
     [Fact]
     public async Task A_payment_refunded_before_settlement_is_never_settled()
     {
-        // Uses the worker-less host to win the race deterministically: capture and refund land
-        // before any worker can claim the job.
-        var setup = PaymentsApiClient.For(fixture.Api.CreateClient(), $"m-{Guid.NewGuid():N}");
-        var payment = await setup.CreateAuthorized();
-        await setup.CaptureRaw(payment.Id, Guid.NewGuid().ToString());
-        await setup.RefundRaw(payment.Id, "changed mind", Guid.NewGuid().ToString());
+        // Two hosts, one private database, started in sequence: the capture and refund land
+        // while nothing is polling, and only then does a worker get to look. Racing a running
+        // worker would make this green on a warm machine and red on a cold one.
+        var connectionString = await fixture.CreateIsolatedDatabaseAsync();
+        var merchantId = $"m-{Guid.NewGuid():N}";
 
-        Assert.Equal("Refunded", (await setup.Get(payment.Id)).Status);
+        Guid paymentId;
+        await using (var quiet = fixture.CreateHost(connectionString, workerEnabled: false))
+        {
+            var api = PaymentsApiClient.For(quiet.CreateClient(), merchantId);
+            var payment = await api.CreateAuthorized();
+            paymentId = payment.Id;
 
-        // The job is still queued and the other host's worker will pick it up. It must resolve
-        // the job as moot rather than drive Refunded -> Settled and retry itself to death.
+            await api.CaptureRaw(paymentId, Guid.NewGuid().ToString());
+            await api.RefundRaw(paymentId, "changed mind", Guid.NewGuid().ToString());
+
+            Assert.Equal("Refunded", (await api.Get(paymentId)).Status);
+        }
+
+        // Only now does a worker see the queue. The job is real and due, and its payment has
+        // moved on — it must resolve it as moot rather than drive Refunded -> Settled and
+        // retry itself to death against a transition that can never be legal.
+        await using var worker = fixture.CreateHost(connectionString, workerEnabled: true);
+        var observer = PaymentsApiClient.For(worker.CreateClient(), merchantId);
+
         await Task.Delay(TimeSpan.FromSeconds(2));
 
-        Assert.Equal("Refunded", (await setup.Get(payment.Id)).Status);
-
-        var trail = await setup.Transitions(payment.Id);
+        var trail = await observer.Transitions(paymentId);
         Assert.DoesNotContain(trail, t => t.ToStatus == "Settled");
         Assert.Equal(["Pending", "Authorized", "Captured", "Refunded"], trail.Select(t => t.ToStatus));
     }

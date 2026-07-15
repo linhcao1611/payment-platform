@@ -192,7 +192,13 @@ public sealed class SettlementWorker(
         {
             // Deliberately outside a transaction: the claim already leased this job, so there
             // is nothing to protect and no reason to pin a connection across the acquirer call.
-            result = await gateway.SettleAsync(job.PaymentId, ct);
+            //
+            // The job id is the gateway idempotency key: it is stable across every attempt and
+            // every lease-expiry redelivery of this job, so if a previous attempt reached the
+            // acquirer and we never learned the outcome, this call replays that settlement
+            // instead of making a second one. This is the one call that moves real money, and
+            // at-least-once delivery means it *will* sometimes be made twice.
+            result = await gateway.SettleAsync(job.PaymentId, job.Id.ToString(), ct);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {

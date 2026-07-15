@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 
 namespace Payments.Infrastructure.Gateway;
@@ -12,7 +13,18 @@ public sealed record GatewayResult(bool Approved, string? DeclineReason);
 public interface IPaymentGateway
 {
     Task<GatewayResult> AuthorizeAsync(string cardToken, long amountMinor, string currency, CancellationToken ct);
-    Task<GatewayResult> SettleAsync(Guid paymentId, CancellationToken ct);
+
+    /// <summary>
+    /// Settles a captured payment.
+    ///
+    /// <paramref name="idempotencyKey"/> must be stable across every retry and redelivery of
+    /// the same logical settlement — the settlement job's id, not a fresh value per call.
+    /// Delivery is at-least-once and the acquirer call is the one step that moves real money,
+    /// so this key is what stops an ambiguous timeout (did it settle? did it not?) from being
+    /// resolved by settling twice. Retrying with a fresh key would make every retry a new
+    /// settlement, which is precisely the failure the retry logic exists to survive.
+    /// </summary>
+    Task<GatewayResult> SettleAsync(Guid paymentId, string idempotencyKey, CancellationToken ct);
 }
 
 public sealed class FakeGatewayOptions
@@ -33,6 +45,25 @@ public sealed class FakePaymentGateway(IOptions<FakeGatewayOptions> options) : I
 {
     private readonly FakeGatewayOptions _options = options.Value;
 
+    /// <summary>
+    /// Settlements the "acquirer" has completed, keyed by idempotency key. A real gateway
+    /// keeps this server-side; the fake honours the same contract so the worker's retry and
+    /// redelivery paths are exercised against something that actually dedupes, rather than
+    /// against a stub that would make the key look load-bearing without proving it is.
+    ///
+    /// The value is a <see cref="Lazy{T}"/> of the in-flight call, so two workers racing on
+    /// one key await the same acquirer call instead of both making one.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, Lazy<Task<GatewayResult>>> _settlements = new();
+
+    private int _acquirerCalls;
+
+    /// <summary>
+    /// How many times the "acquirer" was actually contacted for a settlement. Test surface:
+    /// approvals alone can't distinguish a replay from a second charge.
+    /// </summary>
+    public int AcquirerSettlementCalls => Volatile.Read(ref _acquirerCalls);
+
     public async Task<GatewayResult> AuthorizeAsync(string cardToken, long amountMinor, string currency, CancellationToken ct)
     {
         await SimulateLatency(ct);
@@ -46,8 +77,37 @@ public sealed class FakePaymentGateway(IOptions<FakeGatewayOptions> options) : I
             : new GatewayResult(true, null);
     }
 
-    public async Task<GatewayResult> SettleAsync(Guid paymentId, CancellationToken ct)
+    public async Task<GatewayResult> SettleAsync(Guid paymentId, string idempotencyKey, CancellationToken ct)
     {
+        var attempt = _settlements.GetOrAdd(
+            idempotencyKey,
+            _ => new Lazy<Task<GatewayResult>>(
+                () => ContactAcquirerAsync(ct), LazyThreadSafetyMode.ExecutionAndPublication));
+
+        GatewayResult result;
+        try
+        {
+            result = await attempt.Value;
+        }
+        catch
+        {
+            // A call that blew up settled nothing, so it must not be the cached answer forever.
+            _settlements.TryRemove(idempotencyKey, out _);
+            throw;
+        }
+
+        // Only a completed settlement is replayable. A transient failure deliberately releases
+        // the key so the worker's next attempt genuinely re-tries — the same rule the API's own
+        // idempotency store follows, for the same reason: caching a failure makes it permanent.
+        if (!result.Approved)
+            _settlements.TryRemove(idempotencyKey, out _);
+
+        return result;
+    }
+
+    private async Task<GatewayResult> ContactAcquirerAsync(CancellationToken ct)
+    {
+        Interlocked.Increment(ref _acquirerCalls);
         await SimulateLatency(ct);
 
         return Random.Shared.NextDouble() < _options.SettleFailureRate

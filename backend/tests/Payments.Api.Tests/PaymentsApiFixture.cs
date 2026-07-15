@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
+using Npgsql;
 using Testcontainers.PostgreSql;
 
 namespace Payments.Api.Tests;
@@ -17,10 +18,16 @@ namespace Payments.Api.Tests;
 /// nothing here, since every interesting behaviour in this system (SKIP LOCKED, unique-index
 /// contention, xmin concurrency) is Postgres behaviour.
 ///
-/// One container is shared by the whole collection and two hosts point at it:
-/// <see cref="Api"/> with the settlement worker off, so a test's payment can sit in Captured
-/// without a background thread moving it, and <see cref="ApiWithWorker"/> for the one test
-/// that needs settlement to actually happen.
+/// One container is shared by the whole collection, and the shared <see cref="Api"/> host has
+/// the settlement worker **off**.
+///
+/// That last part is load-bearing. An always-on worker polling the shared database silently
+/// competes with every test: a payment left in Captured gets Settled a few milliseconds later,
+/// so any test asserting on an exact audit trail passes or fails depending on how fast the
+/// machine is. A test that needs a worker asks for its own database
+/// (<see cref="CreateIsolatedDatabaseAsync"/>) and its own host
+/// (<see cref="CreateHost(string, bool)"/>), so it is the only thing draining that queue and
+/// decides exactly when polling starts.
 /// </summary>
 public sealed class PaymentsApiFixture : IAsyncLifetime
 {
@@ -28,36 +35,54 @@ public sealed class PaymentsApiFixture : IAsyncLifetime
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine").Build();
 
     private WebApplicationFactory<Program>? _api;
-    private WebApplicationFactory<Program>? _apiWithWorker;
 
     public WebApplicationFactory<Program> Api => _api!;
-    public WebApplicationFactory<Program> ApiWithWorker => _apiWithWorker!;
+
+    /// <summary>
+    /// A fresh, empty database on the same container, for a test that needs to be the *only*
+    /// worker in play. The shared database has <see cref="ApiWithWorker"/> polling it, and that
+    /// worker will happily claim a job out from under a test's own host — so anything asserting
+    /// on which gateway calls happened needs a queue nobody else is draining. The host migrates
+    /// it on startup.
+    /// </summary>
+    public async Task<string> CreateIsolatedDatabaseAsync()
+    {
+        var name = $"test_{Guid.NewGuid():N}";
+
+        await using (var connection = new NpgsqlConnection(_postgres.GetConnectionString()))
+        {
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand($"""CREATE DATABASE "{name}" """, connection);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        return new NpgsqlConnectionStringBuilder(_postgres.GetConnectionString()) { Database = name }
+            .ConnectionString;
+    }
 
     public async Task InitializeAsync()
     {
         await _postgres.StartAsync();
 
-        // Built sequentially, not lazily in parallel: both hosts migrate on startup, and two
-        // concurrent MigrateAsync calls against one database race for the migration lock.
-        _api = CreateHost(workerEnabled: false);
-        _ = _api.Services;
-
-        _apiWithWorker = CreateHost(workerEnabled: true);
-        _ = _apiWithWorker.Services;
+        _api = new PaymentsApiFactory(_postgres.GetConnectionString(), workerEnabled: false);
+        _ = _api.Services; // force the host to build and migrate now, not inside the first test
     }
 
     public async Task DisposeAsync()
     {
         if (_api is not null)
             await _api.DisposeAsync();
-        if (_apiWithWorker is not null)
-            await _apiWithWorker.DisposeAsync();
 
         await _postgres.DisposeAsync();
     }
 
-    private WebApplicationFactory<Program> CreateHost(bool workerEnabled) =>
-        new PaymentsApiFactory(_postgres.GetConnectionString(), workerEnabled);
+    /// <summary>
+    /// A host against a database of the caller's choosing — pair it with
+    /// <see cref="CreateIsolatedDatabaseAsync"/> to control exactly when a worker starts
+    /// polling, which the shared hosts can't offer.
+    /// </summary>
+    public WebApplicationFactory<Program> CreateHost(string connectionString, bool workerEnabled) =>
+        new PaymentsApiFactory(connectionString, workerEnabled);
 
     private sealed class PaymentsApiFactory(string connectionString, bool workerEnabled)
         : WebApplicationFactory<Program>

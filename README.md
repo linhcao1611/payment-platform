@@ -185,6 +185,22 @@ distributed-systems tax.
 (configurable decline/failure rates, plus a deterministic `-declined` token). No real
 acquirer integration is attempted.
 
+**Settlement is idempotent at the acquirer, keyed by the job id.** The lease means a job
+*will* sometimes be delivered twice — a worker that stalls past its lease while the acquirer
+is processing gets its job reclaimed by another. Settlement is the one call that moves real
+money, so `SettleAsync` takes an idempotency key, and the worker passes the settlement job's
+id: stable across every attempt and every redelivery of that job. An ambiguous timeout (did it
+settle, or not?) is then resolved by the acquirer replaying the original settlement rather
+than performing a second one. A fresh key per attempt would make every retry a new settlement,
+which is exactly the failure the retry logic exists to survive. Note a broker would **not**
+have fixed this — SQS and Rabbit are at-least-once too; only the key is load-bearing.
+
+Transient failures deliberately release the key, so the worker's next attempt genuinely
+re-tries; only a completed settlement is replayable. That's the same rule the API's own
+idempotency store follows, for the same reason — caching a failure makes it permanent. The
+fake gateway implements this contract rather than stubbing it, so the retry and redelivery
+paths are tested against something that actually dedupes.
+
 **Business metrics count after commit, and never on replay.** A client retrying a POST five
 times moves RED by five and `payments_created_total` by one. Counting inside the work would
 have inflated both the retry and the rollback cases, and a counter named `payments_created`
@@ -215,13 +231,14 @@ client-credentials per merchant, resolved in middleware into the same merchant s
 queries already apply. Add per-merchant rate limiting. The scoping rule is already enforced
 at the repository boundary, so this changes *where identity comes from*, not every query.
 
-**Settlement must be idempotent at the gateway.** This is the sharpest known gap. The lease
-means a job can be redelivered — if a worker stalls past its lease while the acquirer is
-processing, a second worker could settle the same payment twice. The platform side is safe
-(the aggregate rejects a second `Settled` transition, and the worker converges the duplicate
-job onto `Succeeded`), but the *acquirer* would see two calls. A real integration sends a
-gateway-side idempotency key derived from the job id. Swapping in a broker does **not** fix
-this — SQS and Rabbit are at-least-once too.
+**Authorization can be orphaned at the acquirer.** This is the sharpest known gap. `create`
+calls the gateway *inside* the idempotency transaction. If that transaction rolls back after
+the acquirer approved — a commit failure, a crash — the authorization exists on the customer's
+card but no payment row does, and because a failure deliberately doesn't burn the key, the
+client's retry authorizes a second time. The customer sees two holds. The fix is the same
+shape as the settlement one below: pass a gateway idempotency key derived from the client's
+`Idempotency-Key`, so the acquirer collapses the retry onto the original authorization. It is
+not done here.
 
 **Migrations are a deploy step, not app startup.** They auto-apply here only in Development.
 In production this is a migration job gated in the pipeline, so a rolling deploy can't have
@@ -290,8 +307,9 @@ guarantee (no field to leak) rather than log scrubbing.
 
 In the order I'd actually do them:
 
-1. **Gateway-side idempotency key on settlement** — closes the double-settle window
-   described above. Small, and it's the only known correctness gap.
+1. **Gateway-side idempotency key on authorization** — closes the orphaned-authorization
+   window described above, the same way settlement is already closed. The only known
+   correctness gap, and the reason it's first.
 2. **Idempotency key TTL sweep** — the table grows unbounded.
 3. **Partial and multiple captures/refunds** — the real shape of the domain; the aggregate
    would carry amounts per operation rather than a single status.
