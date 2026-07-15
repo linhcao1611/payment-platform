@@ -15,16 +15,16 @@
   "panels": [
     {
       "type": "text",
-      "title": "Read this first",
+      "title": "About this data",
       "gridPos": {
-        "h": 3,
+        "h": 4,
         "w": 24,
         "x": 0,
         "y": 0
       },
       "options": {
         "mode": "markdown",
-        "content": "**Metrics start when the stack starts.** These panels show *live* traffic only — they are counters in the request path, so they measure what this process actually served. The demo profile's week of seeded history lives in Postgres and is visible in the dashboard at [localhost:5173](http://localhost:5173); it is deliberately not in Prometheus, because inventing throughput graphs would make every number here a lie.\n\nSo: keep the time range **short** (last 15–30 minutes). A 7-day range on a stack that started minutes ago is empty, and correctly so. To make these move, capture a payment in the dashboard — or hit the API."
+        "content": "**Everything here is earned.** The demo profile runs a load generator that makes real HTTP requests at the API — real payments, captured and settled by the real worker — so every number on this page was measured, not backfilled. Turn it off with `DemoTraffic__Enabled=false` and the graphs go flat, because nothing is happening.\n\n**Metrics start when the stack starts, so keep the range short** (15–30 min). The seeded week of history lives in Postgres and shows up at [localhost:5173](http://localhost:5173) — not here. Counters live in the request path and only count what really happened; inventing throughput would make every number on this page unfalsifiable.\n\n*`Dead-lettered jobs: 1` is expected* — the seeder plants one stuck payment so the alert has something real to fire on."
       }
     },
     {
@@ -34,7 +34,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 3
+        "y": 4
       }
     },
     {
@@ -49,7 +49,7 @@
         "h": 5,
         "w": 6,
         "x": 0,
-        "y": 4
+        "y": 5
       },
       "targets": [
         {
@@ -98,7 +98,7 @@
         "h": 5,
         "w": 6,
         "x": 6,
-        "y": 4
+        "y": 5
       },
       "targets": [
         {
@@ -152,7 +152,7 @@
         "h": 5,
         "w": 6,
         "x": 12,
-        "y": 4
+        "y": 5
       },
       "targets": [
         {
@@ -200,7 +200,7 @@
         "h": 5,
         "w": 6,
         "x": 18,
-        "y": 4
+        "y": 5
       },
       "targets": [
         {
@@ -235,7 +235,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 10
       }
     },
     {
@@ -250,7 +250,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 10
+        "y": 11
       },
       "targets": [
         {
@@ -344,7 +344,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 10
+        "y": 11
       },
       "targets": [
         {
@@ -433,7 +433,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 19
       }
     },
     {
@@ -448,7 +448,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 19
+        "y": 20
       },
       "targets": [
         {
@@ -485,7 +485,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 19
+        "y": 20
       },
       "targets": [
         {
@@ -522,7 +522,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 19
+        "y": 20
       },
       "targets": [
         {
@@ -619,7 +619,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 28
       }
     },
     {
@@ -634,7 +634,7 @@
         "h": 14,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 29
       },
       "targets": [
         {

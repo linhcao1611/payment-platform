@@ -76,14 +76,27 @@ the settlement queue (depth, lag, dead-letter backlog), the payment lifecycle, R
 panel with a **Search logs** box at the top — paste a correlation id into it and you get one
 payment's whole journey, including the worker settling it seconds later on another thread.
 
-**Metrics only cover live traffic — keep the time range short (15–30 minutes).** They are
-counters in the request path, so they measure what the process actually served since it
-started. The demo profile's seeded week lives in Postgres, not in Prometheus: it shows up in
-the payments dashboard and in SQL, but not on these graphs. That is deliberate. Backfilling
-invented throughput would make every number on the dashboard unfalsifiable, and a seven-day
-window on a stack that booted five minutes ago is empty for the same honest reason. To make the
-graphs move, capture a payment. `Dead-lettered jobs` showing **1** is expected — the seeder
-plants one stuck payment so the alerting path is real rather than hypothetical.
+**The numbers on those graphs are earned, not backfilled.** The demo profile runs a load
+generator (`DemoTraffic__Enabled`, ~10 payments/min) that makes real HTTP requests at the API:
+real payments, authorized by the fake gateway, captured, settled by the real worker, some
+declined, some refunded, and some retried with the same idempotency key like a flaky client
+would. Everything the dashboard shows was measured. Set `DemoTraffic__Enabled=false` and the
+graphs go flat, because nothing is happening.
+
+That indirection is the point. Metrics are counters in the *request path*, so they only ever
+record what actually happened — which is why the seeder can plant a week of history in Postgres
+without moving them a single tick, and why **the time range must be short (15–30 minutes)**: a
+seven-day window on a stack that booted five minutes ago is empty, correctly. Backfilling
+invented throughput would make every number here unfalsifiable, so the demo generates real work
+instead of fake data.
+
+Two things worth watching on the dashboard, because they're the design made visible:
+
+- **Requests/min and payment events/min disagree**, and they should. The generator retries ~15%
+  of creates with the same key; the server replays them, so RED counts the request and
+  `payments_created_total` doesn't count a payment.
+- **`Dead-lettered jobs: 1`** is expected — the seeder plants one stuck payment so the alert has
+  something real to fire on.
 
 The point of it being a separate profile: **the application does not change to make any of
 this work.** It writes JSON to stdout and exposes `/metrics`, exactly as it does without this

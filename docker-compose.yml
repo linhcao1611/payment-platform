@@ -51,6 +51,12 @@ services:
       Demo__Seed: "true"
       Demo__Days: "7"
       Demo__PaymentsPerDay: "70"
+      # Real traffic against ourselves, so /metrics and the Grafana dashboards show something
+      # true. Seeded history can't move the counters — they live in the request path and count
+      # what actually happened — and backfilling invented numbers would make every graph
+      # unfalsifiable. So the demo earns its data instead. Set Enabled=false for a still table.
+      DemoTraffic__Enabled: "true"
+      DemoTraffic__PaymentsPerMinute: "10"
     ports:
       - "5080:8080"
     depends_on:

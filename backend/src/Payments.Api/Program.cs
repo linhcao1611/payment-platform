@@ -50,6 +50,12 @@ builder.Services.AddSingleton<IPaymentGateway, FakePaymentGateway>();
 builder.Services.Configure<DemoOptions>(builder.Configuration.GetSection(DemoOptions.SectionName));
 builder.Services.AddHostedService<DemoDataSeeder>();
 
+// Drives real requests at ourselves so the dashboards have earned data rather than fabricated
+// history. Demo aid; off unless configured on.
+builder.Services.Configure<DemoTrafficOptions>(
+    builder.Configuration.GetSection(DemoTrafficOptions.SectionName));
+builder.Services.AddHostedService<DemoTrafficGenerator>();
+
 // The settlement worker rides in the API process today. It is a project reference, not a
 // class here, so promoting it to its own deployment is a hosting change rather than a rewrite.
 builder.Services.Configure<SettlementOptions>(
