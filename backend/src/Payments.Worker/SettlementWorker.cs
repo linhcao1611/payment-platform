@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -118,6 +119,18 @@ public sealed class SettlementWorker(
             {
                 // One poison job must not strand the rest of the batch.
                 logger.LogError(e, "Settlement job {SettlementJobId} threw; leaving it to its lease", job.Id);
+
+                // The batch shares this scope's DbContext, and a failed SaveChanges leaves the
+                // failed entities tracked and dirty. Without cleanup, the next job's save
+                // re-attempts this job's doomed changes — one lost concurrency race (a refund
+                // beating our MarkSettled to the row) would then fail every remaining job in
+                // the batch, each burning an attempt toward dead-lettering on someone else's
+                // error. Detach the dirty entries only: ChangeTracker.Clear() would also
+                // detach the rest of the batch's (unchanged, still-tracked) job rows, and
+                // their own status updates would silently stop persisting.
+                var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+                foreach (var entry in db.ChangeTracker.Entries().Where(x => x.State != EntityState.Unchanged).ToList())
+                    entry.State = EntityState.Detached;
             }
         }
 

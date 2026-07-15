@@ -129,7 +129,7 @@ public sealed class DemoTrafficGenerator(
             description = Description(),
         };
 
-        var response = await PostAsync(http, "/api/payments", body, createKey, ct);
+        using var response = await PostAsync(http, "/api/payments", body, createKey, ct);
         if (!response.IsSuccessStatusCode)
         {
             logger.LogDebug("Demo traffic: create returned {StatusCode}", response.StatusCode);
@@ -149,7 +149,7 @@ public sealed class DemoTrafficGenerator(
         if (payment.Status is not "Authorized" || Random.NextDouble() >= settings.CaptureRate)
             return;
 
-        var captured = await PostAsync(http, $"/api/payments/{payment.Id}/capture", null, Guid.NewGuid().ToString(), ct);
+        using var captured = await PostAsync(http, $"/api/payments/{payment.Id}/capture", null, Guid.NewGuid().ToString(), ct);
         if (!captured.IsSuccessStatusCode)
             return;
 

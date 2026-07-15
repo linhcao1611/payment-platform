@@ -41,15 +41,26 @@ public sealed class PaymentsController(
     /// </summary>
     private readonly JsonSerializerOptions _json = jsonOptions.Value.JsonSerializerOptions;
 
+    // Header lengths are capped to the column widths they end up in (merchant_id/actor and
+    // idempotency_keys.key). Over-long values are treated the same as missing ones — the
+    // rejection message names the limit — because the alternative is the insert failing deep
+    // in the transaction and surfacing as a 500 with no errorCode.
+    private const int MaxMerchantIdLength = 64;
+    private const int MaxIdempotencyKeyLength = 128;
+
     private string? MerchantId =>
-        Request.Headers.TryGetValue(MerchantHeader, out var v) && !string.IsNullOrWhiteSpace(v)
-            ? v.ToString()
-            : null;
+        Request.Headers.TryGetValue(MerchantHeader, out var v)
+            && !string.IsNullOrWhiteSpace(v)
+            && v.ToString() is { Length: <= MaxMerchantIdLength } merchant
+                ? merchant
+                : null;
 
     private string? RequestIdempotencyKey =>
-        Request.Headers.TryGetValue(IdempotencyHeader, out var v) && !string.IsNullOrWhiteSpace(v)
-            ? v.ToString()
-            : null;
+        Request.Headers.TryGetValue(IdempotencyHeader, out var v)
+            && !string.IsNullOrWhiteSpace(v)
+            && v.ToString() is { Length: <= MaxIdempotencyKeyLength } key
+                ? key
+                : null;
 
     [HttpPost]
     [ProducesResponseType<PaymentResponse>(StatusCodes.Status201Created)]
@@ -315,15 +326,15 @@ public sealed class PaymentsController(
     private ObjectResult MissingMerchant() =>
         ProblemWithCode(
             StatusCodes.Status401Unauthorized,
-            "Missing merchant identity",
-            $"The {MerchantHeader} header is required.",
+            "Missing or invalid merchant identity",
+            $"The {MerchantHeader} header is required and must be at most {MaxMerchantIdLength} characters.",
             "merchant_identity_required");
 
     private ObjectResult MissingIdempotencyKey() =>
         ProblemWithCode(
             StatusCodes.Status400BadRequest,
-            "Missing idempotency key",
-            $"The {IdempotencyHeader} header is required on this operation.",
+            "Missing or invalid idempotency key",
+            $"The {IdempotencyHeader} header is required on this operation and must be at most {MaxIdempotencyKeyLength} characters.",
             "idempotency_key_required");
 
     private ObjectResult PaymentNotFound(Guid id) =>

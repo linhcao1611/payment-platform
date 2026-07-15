@@ -70,9 +70,22 @@ public sealed class PaymentRepository(PaymentsDbContext db) : IPaymentRepository
             // An exact id is the common case (pasted from a receipt or a support ticket) and
             // hits the primary key. A partial id falls back to a prefix scan, which is fine
             // at this scale but is the query to watch if the table ever grows.
-            payments = Guid.TryParse(query.Search, out var id)
-                ? payments.Where(p => p.Id == id)
-                : payments.Where(p => EF.Functions.ILike(p.Id.ToString(), $"{query.Search}%"));
+            if (Guid.TryParse(query.Search, out var id))
+            {
+                payments = payments.Where(p => p.Id == id);
+            }
+            else
+            {
+                // % and _ are LIKE wildcards; escape them (and the escape character itself,
+                // Postgres's default backslash) so user input matches literally. Harmless here
+                // since ids are hex, but a search box that secretly accepts patterns is a bug
+                // waiting for a column where it isn't harmless.
+                var escaped = query.Search
+                    .Replace(@"\", @"\\")
+                    .Replace("%", @"\%")
+                    .Replace("_", @"\_");
+                payments = payments.Where(p => EF.Functions.ILike(p.Id.ToString(), $"{escaped}%"));
+            }
         }
 
         // Counted before paging, and on the same filters, so the UI's page count is honest.

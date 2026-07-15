@@ -41,16 +41,21 @@ public sealed class Payment
         string correlationId,
         DateTimeOffset now)
     {
-        if (string.IsNullOrWhiteSpace(merchantId))
-            throw new DomainValidationException("merchant_required", "Merchant id is required.");
+        // Length ceilings match the column widths. Without them the database is the first
+        // validator, and its answer to an over-long value is a DbUpdateException — a 500 with
+        // no errorCode — instead of the 400 every other bad input gets.
+        if (string.IsNullOrWhiteSpace(merchantId) || merchantId.Length > 64)
+            throw new DomainValidationException("invalid_merchant", "Merchant id is required and must be at most 64 characters.");
         if (amountMinor <= 0)
             throw new DomainValidationException("invalid_amount", "Amount must be a positive number of minor units.");
         if (currency is not { Length: 3 } || !currency.All(char.IsAsciiLetterUpper))
             throw new DomainValidationException("invalid_currency", "Currency must be a 3-letter uppercase ISO 4217 code.");
         if (cardLast4 is not { Length: 4 } || !cardLast4.All(char.IsAsciiDigit))
             throw new DomainValidationException("invalid_card_last4", "Card last4 must be exactly 4 digits.");
-        if (string.IsNullOrWhiteSpace(cardBrand))
-            throw new DomainValidationException("invalid_card_brand", "Card brand is required.");
+        if (string.IsNullOrWhiteSpace(cardBrand) || cardBrand.Length > 32)
+            throw new DomainValidationException("invalid_card_brand", "Card brand is required and must be at most 32 characters.");
+        if (description is { Length: > 512 })
+            throw new DomainValidationException("invalid_description", "Description must be at most 512 characters.");
 
         var payment = new Payment
         {

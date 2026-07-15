@@ -56,6 +56,18 @@ public sealed class FakePaymentGateway(IOptions<FakeGatewayOptions> options) : I
     /// </summary>
     private readonly ConcurrentDictionary<string, Lazy<Task<GatewayResult>>> _settlements = new();
 
+    /// <summary>
+    /// Approximate-FIFO eviction of remembered settlements. This is a singleton and the demo
+    /// traffic generator settles ~14k payments/day, so without a bound the dictionary grows
+    /// forever — the in-memory twin of the "idempotency keys are never swept" gap the README
+    /// owns for the database. A real gateway holds these server-side with a TTL (24h is
+    /// typical); the fake just needs to outlive any plausible redelivery window, and the
+    /// worker's lease is one minute.
+    /// </summary>
+    private readonly ConcurrentQueue<string> _settlementOrder = new();
+
+    private const int MaxRememberedSettlements = 10_000;
+
     private int _acquirerCalls;
 
     /// <summary>
@@ -100,7 +112,17 @@ public sealed class FakePaymentGateway(IOptions<FakeGatewayOptions> options) : I
         // the key so the worker's next attempt genuinely re-tries — the same rule the API's own
         // idempotency store follows, for the same reason: caching a failure makes it permanent.
         if (!result.Approved)
+        {
             _settlements.TryRemove(idempotencyKey, out _);
+        }
+        else
+        {
+            // Replays enqueue duplicates, which makes the FIFO approximate — acceptable for a
+            // fake whose only requirement is "doesn't grow forever".
+            _settlementOrder.Enqueue(idempotencyKey);
+            while (_settlements.Count > MaxRememberedSettlements && _settlementOrder.TryDequeue(out var oldest))
+                _settlements.TryRemove(oldest, out _);
+        }
 
         return result;
     }

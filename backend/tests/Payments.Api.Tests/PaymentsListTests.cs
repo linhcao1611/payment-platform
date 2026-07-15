@@ -136,6 +136,18 @@ public class PaymentsListTests(PaymentsApiFixture fixture)
     }
 
     [Fact]
+    public async Task Search_treats_like_wildcards_as_literals()
+    {
+        var api = NewMerchant();
+        await api.CreateAuthorized();
+
+        // Unescaped, "%" would be a LIKE wildcard and match every payment. Ids are hex, so a
+        // literal "%" must match nothing.
+        Assert.Equal(0, (await Page(api, "?search=%25")).TotalCount);
+        Assert.Equal(0, (await Page(api, "?search=__")).TotalCount);
+    }
+
+    [Fact]
     public async Task Page_size_is_clamped_rather_than_rejected()
     {
         var api = NewMerchant();

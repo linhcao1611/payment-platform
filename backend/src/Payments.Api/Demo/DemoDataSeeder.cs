@@ -252,7 +252,14 @@ public sealed class DemoDataSeeder(
 
         // And some settled payments are refunded afterwards — the ordinary, real-world refund.
         if (random.NextDouble() < 0.05)
-            payment.Refund(Actor, Guid.NewGuid().ToString("N"), RefundReason(random), settledAt.AddHours(random.Next(1, 30)));
+        {
+            // Clamped to now: for payments created inside the last ~30 hours this offset can
+            // land in the future, and the dashboard then shows "Updated: tomorrow" — nothing
+            // says fake data quite like a refund that hasn't happened yet.
+            var refundedAt = settledAt.AddHours(random.Next(1, 30));
+            payment.Refund(Actor, Guid.NewGuid().ToString("N"), RefundReason(random),
+                refundedAt > now ? now : refundedAt);
+        }
 
         return (payment, succeeded);
     }
