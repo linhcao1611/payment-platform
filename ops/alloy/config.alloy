@@ -1,0 +1,40 @@
+// Ships container stdout to Loki.
+//
+// The API is untouched by any of this: it writes compact JSON to stdout, and collecting that
+// is infrastructure's job — which is the whole reason the app has no file sink and no Loki
+// sink of its own. Swapping Loki for anything else is a change here, not in the application.
+
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Docker reports names as "/payments-api"; strip the slash so the Grafana label reads
+  // `container="payments-api"`.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_log_stream"]
+    target_label  = "stream"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  labels     = { job = "docker" }
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

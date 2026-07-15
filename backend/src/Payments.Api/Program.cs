@@ -17,10 +17,17 @@ var builder = WebApplication.CreateBuilder(args);
 // container runtime owns that. ReadFrom.Configuration keeps levels tunable per environment
 // without a redeploy. Card fields can't leak here by construction: the domain only ever
 // holds last4 and brand (see the PCI note on Payment).
+//
+// Rendered rather than plain CompactJsonFormatter: the plain one emits only the message
+// *template* (`@mt`), so a human reading these in Grafana or Kibana sees
+// "Payment {PaymentId} captured" with the placeholders unfilled. This emits `@m` — the message
+// with values substituted — while keeping every property as its own queryable field, plus `@i`,
+// a hash of the template, which preserves the group-by-message-type that `@mt` would give.
+// Structured for machines, readable for the person on call.
 builder.Services.AddSerilog((_, cfg) => cfg
     .ReadFrom.Configuration(builder.Configuration)
     .Enrich.FromLogContext()
-    .WriteTo.Console(new CompactJsonFormatter()));
+    .WriteTo.Console(new RenderedCompactJsonFormatter()));
 
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails();

@@ -1,0 +1,236 @@
+{
+  "uid": "payments-overview",
+  "title": "Payments — overview",
+  "tags": ["payments"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Settlement queue",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Queue depth",
+      "description": "Jobs waiting to be settled. The single best 'is settlement keeping up' signal.",
+      "datasource": { "type": "prometheus", "uid": "payments-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+      "targets": [{ "expr": "settlement_queue_depth", "legendFormat": "pending", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 25 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat",
+      "title": "Queue lag",
+      "description": "Age of the oldest pending job. Depth alone can't tell a healthy backlog from a stuck one — a queue of 5 that never drains is worse than 500 that does.",
+      "datasource": { "type": "prometheus", "uid": "payments-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
+      "targets": [{ "expr": "settlement_lag_seconds", "legendFormat": "oldest", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 30 },
+              { "color": "red", "value": 120 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat",
+      "title": "Dead-lettered jobs",
+      "description": "Payments stuck Captured after exhausting their retries — money parked for an operator. Alert on THIS, not on settlement_dead_lettered_total: the counter resets when the process restarts, this gauge is read from the table and doesn't forget.",
+      "datasource": { "type": "prometheus", "uid": "payments-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
+      "targets": [{ "expr": "settlement_dead_jobs", "legendFormat": "dead", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat",
+      "title": "Settled (total)",
+      "datasource": { "type": "prometheus", "uid": "payments-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
+      "targets": [{ "expr": "payments_settled_total", "legendFormat": "settled", "refId": "A" }],
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] }
+    },
+    {
+      "type": "row",
+      "title": "Payment lifecycle",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Payment events / min",
+      "description": "Business counters, not HTTP. These increment after the transaction commits and never on an idempotent replay — so a client retrying a POST five times moves the RED panels below by five and these by one.",
+      "datasource": { "type": "prometheus", "uid": "payments-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "targets": [
+        { "expr": "sum(rate(payments_created_total[1m])) * 60", "legendFormat": "created", "refId": "A" },
+        { "expr": "sum(rate(payments_authorized_total[1m])) * 60", "legendFormat": "authorized", "refId": "B" },
+        { "expr": "sum(rate(payments_captured_total[1m])) * 60", "legendFormat": "captured", "refId": "C" },
+        { "expr": "sum(rate(payments_settled_total[1m])) * 60", "legendFormat": "settled", "refId": "D" },
+        { "expr": "sum(rate(payments_refunded_total[1m])) * 60", "legendFormat": "refunded", "refId": "E" },
+        { "expr": "sum(rate(payments_failed_total[1m])) * 60", "legendFormat": "failed", "refId": "F" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 8, "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "failed" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byName", "options": "settled" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Settlement attempts / min, by outcome",
+      "description": "cancelled is a normal outcome, not a failure: the payment was refunded before settlement ran, so the job was moot. Keeping it out of the failed bucket is what stops a refund-heavy day looking like an incident.",
+      "datasource": { "type": "prometheus", "uid": "payments-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "targets": [
+        { "expr": "sum by (outcome) (rate(settlement_attempts_total[1m])) * 60", "legendFormat": "{{outcome}}", "refId": "A" },
+        { "expr": "sum(rate(settlement_retries_total[1m])) * 60", "legendFormat": "retries", "refId": "B" },
+        { "expr": "sum(rate(settlement_dead_lettered_total[1m])) * 60", "legendFormat": "dead-lettered", "refId": "C" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 8, "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "succeeded" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
+          { "matcher": { "id": "byName", "options": "failed" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
+          { "matcher": { "id": "byName", "options": "dead-lettered" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "row",
+      "title": "RED — HTTP",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests / min by endpoint",
+      "description": "Labelled by route template, never the raw path — otherwise every payment id would become its own time series and take the metrics backend down.",
+      "datasource": { "type": "prometheus", "uid": "payments-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum by (endpoint) (rate(http_requests_received_total{endpoint!~\"/healthz|/readyz|/metrics\", endpoint!=\"\"}[1m])) * 60",
+          "legendFormat": "{{endpoint}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 8, "lineWidth": 2 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency p95 by endpoint",
+      "datasource": { "type": "prometheus", "uid": "payments-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, endpoint) (rate(http_request_duration_seconds_bucket{endpoint!~\"/healthz|/readyz|/metrics\", endpoint!=\"\"}[5m])))",
+          "legendFormat": "{{endpoint}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 0, "lineWidth": 2 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Responses by status code",
+      "datasource": { "type": "prometheus", "uid": "payments-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum by (code) (rate(http_requests_received_total{endpoint!~\"/healthz|/readyz|/metrics\", endpoint!=\"\"}[1m])) * 60",
+          "legendFormat": "{{code}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 20, "lineWidth": 1, "stacking": { "mode": "normal" } } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "200" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
+          { "matcher": { "id": "byName", "options": "201" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
+          { "matcher": { "id": "byName", "options": "409" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
+          { "matcher": { "id": "byName", "options": "500" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "row",
+      "title": "Logs",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 }
+    },
+    {
+      "type": "logs",
+      "title": "API + worker logs — filter with $search",
+      "description": "Paste a correlation id into the search variable above and you get one payment's whole journey: the handler, the request log, and the worker settling it seconds later on a different thread. That works because the id is persisted onto the settlement job, not held in memory.",
+      "datasource": { "type": "loki", "uid": "payments-loki" },
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 25 },
+      "targets": [
+        {
+          "expr": "{container=\"payments-api\"} |= \"$search\" | json | line_format \"{{._m}}\"",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "search",
+        "type": "textbox",
+        "label": "Search logs",
+        "description": "A correlation id, a payment id, or any substring.",
+        "query": "",
+        "current": { "text": "", "value": "" },
+        "options": []
+      }
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+# Provisioned so the stack comes up ready to use — a reviewer should never have to add a
+# datasource by hand to see whether the observability works.
+apiVersion: 1
+
+datasources:
+  # Fixed uids so the provisioned dashboard can reference them; auto-generated ones would
+  # differ per install and leave every panel showing "datasource not found".
+  - name: Prometheus
+    uid: payments-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 5s
+
+  - name: Loki
+    uid: payments-loki
+    type: loki
+    access: proxy
+    url: http://loki:3100

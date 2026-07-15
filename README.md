@@ -43,6 +43,28 @@ FakeGateway__AuthorizeDeclineRate=0.5 docker compose --profile demo up --build
 
 Tear down with `docker compose --profile demo down` (add `-v` to drop the database volume).
 
+### Optional: Grafana, Prometheus and Loki
+
+```bash
+docker compose --profile demo --profile observability up --build
+```
+
+- **Grafana: http://localhost:3000** — opens straight on the *Payments — overview* dashboard,
+  no login (anonymous admin; local demo only)
+- Prometheus: http://localhost:9090
+
+Everything is provisioned: datasources, the dashboard, the scrape config. The dashboard has
+the settlement queue (depth, lag, dead-letter backlog), the payment lifecycle, RED, and a log
+panel with a **Search logs** box at the top — paste a correlation id into it and you get one
+payment's whole journey, including the worker settling it seconds later on another thread.
+
+The point of it being a separate profile: **the application does not change to make any of
+this work.** It writes JSON to stdout and exposes `/metrics`, exactly as it does without this
+profile. Alloy discovers containers and ships their stdout to Loki; Prometheus scrapes the
+endpoint that was already there. No Loki sink, no agent library, no code. That is what the
+"seams, not a stack" tradeoff below means in practice — and this profile is the proof it
+holds, rather than a claim you'd have to take on trust.
+
 ### The dev loop (hot reload)
 
 Prerequisites: .NET 10 SDK, Node 20+, Docker.
@@ -316,10 +338,12 @@ two versions racing to migrate.
 **Secrets.** The compose password and connection string are in plain config because they're
 local-only. Real deployment pulls them from a secrets manager into the environment.
 
-**Observability wiring.** Metrics are exposed in Prometheus text format at `/metrics`; a
-scrape config points a real Prometheus at it. Traces use `ActivitySource` with no exporter
-registered — adding an OTLP exporter is one config change. This is deliberately a set of
-seams rather than a shipped monitoring stack.
+**Observability wiring.** Metrics are exposed in Prometheus text format at `/metrics` and logs
+as JSON on stdout; the `observability` profile above points a real Grafana/Prometheus/Loki at
+both without touching a line of application code, which is the property that matters. Traces
+use `ActivitySource` with no exporter registered — adding an OTLP exporter is the same kind of
+one-config-change. The default stack ships seams, not a monitoring platform, because the seams
+are the part that has to be right.
 
 **Idempotency keys are never swept.** The table grows forever. Production needs a TTL job
 (24h is typical) and an index on `created_at` to support it.
@@ -339,11 +363,13 @@ guarantee (no field to leak) rather than log scrubbing.
 
 ## Observability
 
-- **Logs:** Serilog, compact JSON on stdout — no file sinks, no rotation; the container
-  runtime owns collection. View them with `docker compose logs -f api`, or on the console of
-  `dotnet run`. Each line keeps the message *template* in `@mt` with the values as separate
-  fields (`PaymentId`, `MerchantId`, `CorrelationId`), which is what makes them queryable
-  rather than greppable prose. Levels are tuned in the `Serilog` config section.
+- **Logs:** Serilog, compact JSON (CLEF) on stdout — no file sinks, no rotation; the container
+  runtime owns collection. View them with `docker compose logs -f api`, on the console of
+  `dotnet run`, or in Grafana via the observability profile above. Every property is its own
+  field (`PaymentId`, `MerchantId`, `CorrelationId`), which is what makes them queryable rather
+  than greppable prose, and `@m` carries the rendered message so a human reading them sees
+  "Payment abc… captured for merchant acme" rather than an unfilled template. Levels are tuned
+  in the `Serilog` config section.
 - **Correlation:** `CorrelationIdMiddleware` reads or mints `X-Correlation-Id`, echoes it, and
   pushes it into the logging scope. The id is persisted onto audit rows *and* the settlement
   job, and re-established in the worker's log scope — so grepping one id returns the API

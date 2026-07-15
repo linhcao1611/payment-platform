@@ -1,0 +1,16 @@
+# The one config change the README promises: pointing a real Prometheus at the /metrics the
+# API already exposes. Nothing in the application changes to make this work.
+global:
+  # Tighter than a production default (15-60s) because a demo shouldn't wait a minute to see a
+  # queue depth move. At real scale this is a cost/resolution tradeoff, not a free win.
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: payments-api
+    metrics_path: /metrics
+    static_configs:
+      # In-network address; the host's 5080 mapping is irrelevant here.
+      - targets: ["api:8080"]
+        labels:
+          service: payments-api
