@@ -1,12 +1,12 @@
 # Payment Processing Platform
 
-A simplified payment processing platform: backend API (.NET 8), React dashboard, and an
+A simplified payment processing platform: backend API (.NET 10), React dashboard, and an
 asynchronous settlement workflow. Built for the senior engineer technical exercise —
 see [docs/PLAN.md](docs/PLAN.md) for the implementation plan.
 
 ## Setup
 
-Prerequisites: .NET 8 SDK, Node 20+, Docker.
+Prerequisites: .NET 10 SDK, Node 20+, Docker.
 
 ```bash
 # 1. Start Postgres
