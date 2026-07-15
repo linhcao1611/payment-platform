@@ -4,6 +4,9 @@ A simplified payment processing platform: backend API (.NET 10), React dashboard
 asynchronous settlement workflow. Built for the senior engineer technical exercise —
 see [docs/PLAN.md](docs/PLAN.md) for the implementation plan.
 
+The brief asks for judgment rather than feature count, so this README spends most of its
+words on **why** things are the way they are, and on what is deliberately missing.
+
 ## Setup
 
 Prerequisites: .NET 10 SDK, Node 20+, Docker.
@@ -28,41 +31,273 @@ npm run dev
 - Postgres: `localhost:5433` (host port 5433 to avoid clashing with a local Postgres on 5432)
 
 ```bash
-# Run tests
+# Run tests (integration tests start their own Postgres via Testcontainers — Docker must be up)
 cd backend && dotnet test
 ```
 
-## Architecture overview
+The fake gateway declines ~15% of authorizations and fails ~20% of settlements by default,
+so the failure paths are demonstrable by hand. To make a demo deterministic:
 
-_TODO: components diagram — API, domain state machine, Postgres, settlement worker, dashboard._
+```bash
+FakeGateway__AuthorizeDeclineRate=0 FakeGateway__SettleFailureRate=0 \
+  dotnet run --project src/Payments.Api
+```
+
+A card token ending in `-declined` always declines, whatever the rate.
+
+## Architecture
+
+```
+                   ┌───────────────────┐
+                   │  React dashboard  │   list · detail · capture/refund · timeline
+                   └─────────┬─────────┘
+                             │  /api  (Vite proxy)
+                             ▼
+   ┌─────────────────────────────────────────────────┐
+   │                  Payments.Api                   │
+   │  correlation-id → problem+json → controllers    │
+   └───────┬─────────────────────────────┬───────────┘
+           │                             │
+           ▼                             ▼
+   ┌───────────────┐            ┌──────────────────┐
+   │ Payments      │            │ Payments         │
+   │ .Domain       │            │ .Infrastructure  │──────► fake gateway
+   │               │            │                  │        (authorize/settle)
+   │ state machine │            │ EF Core ·        │
+   │ + audit       │            │ idempotency ·    │
+   └───────────────┘            │ outbox queue     │
+                                └────────┬─────────┘
+                                         │
+                                         ▼
+                    ┌────────────────────────────────────┐
+                    │             Postgres               │
+                    │  payments · payment_transitions    │
+                    │  idempotency_keys · settlement_jobs│
+                    └────────────────┬───────────────────┘
+                                     │  FOR UPDATE SKIP LOCKED
+                                     ▼
+                          ┌──────────────────────┐
+                          │   Payments.Worker    │  claim → settle → retry/dead-letter
+                          │  (BackgroundService, │
+                          │   hosted in the API) │
+                          └──────────────────────┘
+```
 
 | Project | Responsibility |
 |---|---|
 | `Payments.Domain` | Payment aggregate + state machine. No dependencies. |
-| `Payments.Infrastructure` | EF Core persistence, idempotency store, settlement job queue (outbox-style), fake gateway. |
-| `Payments.Worker` | Settlement `BackgroundService` — polls jobs, retry w/ backoff, dead-letter. |
-| `Payments.Api` | HTTP endpoints, middleware (correlation ID, idempotency, problem+json errors), composition root. |
+| `Payments.Infrastructure` | EF Core persistence, idempotency store, settlement job queue (outbox-style), fake gateway, metric definitions. |
+| `Payments.Worker` | Settlement `BackgroundService` — claims jobs, retry w/ backoff, dead-letter. |
+| `Payments.Api` | HTTP endpoints, middleware (correlation ID, problem+json errors), composition root. |
+
+Dependencies point one way: `Domain ← Infrastructure ← Api`, and `Worker` sits beside the
+API rather than inside it. The worker is hosted in the API process today, but the only
+coupling is two lines in `Program.cs` — promoting it to its own deployment is a hosting
+change, not a rewrite.
 
 ## Payment lifecycle
 
-`Pending → Authorized → Captured → Settled`, with `Failed` and `Refunded` as terminal
-branches. Every transition is recorded in an append-only audit table.
+```
+Pending ──► Authorized ──► Captured ──► Settled
+   │            │              │           │
+   └──► Failed ◄┘              └──► Refunded ◄┘
+```
+
+`Failed` is terminal. `Refunded` is terminal and reachable from `Captured` or `Settled` —
+refunding after the money has moved is the real-world case, not an edge case.
+
+`PaymentStateMachine` holds the transition table and is the single source of truth. Every
+mutation goes through one private `Transition()` method, which is also what appends the
+audit record — so an illegal transition and an unaudited transition are both impossible by
+construction rather than by review. The domain unit tests assert the full 36-pair matrix.
+
+## API
+
+```
+POST   /api/payments                    Idempotency-Key required
+GET    /api/payments?status=&from=&to=&search=&page=&pageSize=
+GET    /api/payments/{id}
+GET    /api/payments/{id}/transitions   audit trail; feeds the UI timeline
+POST   /api/payments/{id}/capture       Idempotency-Key required
+POST   /api/payments/{id}/refund        Idempotency-Key required
+GET    /healthz  /readyz  /metrics
+```
+
+Errors are RFC 7807 `application/problem+json` with a stable `errorCode` extension
+(`idempotency_conflict`, `invalid_state_transition`, `payment_not_found`, …) so clients can
+branch on one field rather than parse prose. Validation is 400, unknown payment is 404,
+illegal transition / key conflict / lost concurrency race are 409.
+
+Merchant identity comes from an `X-Merchant-Id` header and **every** query is scoped by it.
+Another merchant's payment is a 404, not a 403 — you shouldn't be able to learn that
+someone else's payment id exists.
 
 ## Tradeoffs made
 
-_TODO: in-process worker + DB-as-queue vs broker; polling SKIP LOCKED vs LISTEN/NOTIFY;
-modular monolith vs services; simulated gateway; header-based merchant identity._
+**A Postgres table as the queue, not a broker.** The capture handler writes a
+`settlement_jobs` row in the *same transaction* as the `Captured` transition, and the worker
+claims rows with `FOR UPDATE SKIP LOCKED`. The obvious alternative — commit the capture,
+then publish to SQS/Rabbit — is a dual-write: the publish can fail after the capture commits
+and the settlement is silently lost. The outbox makes that impossible with zero extra infra,
+and gives at-least-once delivery and a free queue-depth metric (`count(*)`).
+*Given up:* independent scaling, push semantics, and a latency floor set by `PollInterval`.
+*Production:* the outbox stays exactly as it is; a relay publishes from it to a broker and
+the worker becomes its own deployment. This design is a step on that path, not a detour.
+
+**Idempotency reserves the key and does the work in one transaction.** The stored response,
+the payment's state change, its audit rows and the settlement job all commit together, so a
+key can never be consumed without its side effects landing, or vice versa. A concurrent
+duplicate blocks on the key's unique index until the first request commits and then replays
+it — which means no in-flight state is ever observable and there is no reservation lease to
+expire and reclaim.
+*Given up:* the gateway round trip happens with a transaction open, which under real acquirer
+latency pins a pooled connection per in-flight payment. The alternative (commit the
+reservation first, then work) frees the connection but needs lease/expiry logic to recover
+keys stranded by a crash. At this scale the simpler, always-consistent option wins; at real
+throughput the connection cost would force the other one.
+
+**Failures don't burn an idempotency key.** If the work throws, the reservation rolls back
+with it, so only responses actually returned are replayable and a client can retry a failed
+call with the same key. The alternative — storing 4xx responses — means a transient bug
+becomes permanently replayable.
+
+**Replays return status and body, not the full header set.** A replayed create is a 201 with
+the identical body and an `Idempotency-Replayed: true` header, but no `Location`. This is
+how Stripe replays, and storing whole header sets to reproduce one header didn't earn its
+keep.
+
+**Polling with SKIP LOCKED, not LISTEN/NOTIFY.** Simpler, and the row lock is the mutual
+exclusion so N workers need no distributed lock. The cost is settlement latency ≈
+`PollInterval` and a small constant query load. LISTEN/NOTIFY would cut the latency; at
+exercise volumes it's not worth the connection management.
+
+**The claim doubles as a lease.** Claiming stamps `next_attempt_at` into the future and the
+poll selects `Pending` *or* `Processing`, so a worker that crashes mid-job has its work
+reclaimed when the lease lapses rather than stranding the job forever. This needed no schema
+change, and `attempt_count` increments at claim time so a crash loop still counts toward
+dead-lettering.
+
+**Modular monolith over services.** Right-sized for one domain slice, and the boundaries are
+project references, so the seams a reviewer would ask about are visible without the
+distributed-systems tax.
+
+**A simulated gateway.** Keeps PCI scope at zero and makes the failure paths demonstrable
+(configurable decline/failure rates, plus a deterministic `-declined` token). No real
+acquirer integration is attempted.
+
+**Business metrics count after commit, and never on replay.** A client retrying a POST five
+times moves RED by five and `payments_created_total` by one. Counting inside the work would
+have inflated both the retry and the rollback cases, and a counter named `payments_created`
+that doesn't mean payments created is worse than no counter.
+
+**`/healthz` checks nothing on purpose.** A liveness probe that depends on Postgres has
+Kubernetes kill every API pod during a database blip, turning a recoverable incident into an
+outage. Readiness (`/readyz`) is where the dependency check belongs.
 
 ## Assumptions
 
-_TODO: single currency, full-amount capture/refund only, simulated authorization,
-no real card data (last4 + brand only)._
+- **Card data arrives pre-tokenized**, as a client-side tokenization SDK would produce: an
+  opaque token plus display-safe metadata. The platform holds `cardLast4` + `cardBrand` +
+  the token, and no PAN/CVV field exists anywhere in the domain, the DB or the API. That's
+  structural, not a redaction rule someone has to remember.
+- **Merchant identity is trusted from a header.** This is an auth stub, not auth.
+- **One currency per payment, no FX.** Amounts are integer minor units — never floats.
+- **Full-amount capture and refund only.** No partial or multiple captures.
+- **Authorization is synchronous at create time** (auth-then-capture); settlement is async.
+- **Refunds don't call the gateway.** The state change and audit trail are what's being
+  demonstrated; a real refund is a gateway call with its own idempotency and failure modes.
+- **Single-region, single database.** No sharding, no read replicas.
 
 ## Production considerations
 
-_TODO: broker migration path, auth (API keys / OAuth2 client credentials), OTLP
-exporter config, secrets management, horizontal scaling, PCI scope._
+**Authentication and authorization.** Replace the header with API keys or OAuth2
+client-credentials per merchant, resolved in middleware into the same merchant scoping the
+queries already apply. Add per-merchant rate limiting. The scoping rule is already enforced
+at the repository boundary, so this changes *where identity comes from*, not every query.
+
+**Settlement must be idempotent at the gateway.** This is the sharpest known gap. The lease
+means a job can be redelivered — if a worker stalls past its lease while the acquirer is
+processing, a second worker could settle the same payment twice. The platform side is safe
+(the aggregate rejects a second `Settled` transition, and the worker converges the duplicate
+job onto `Succeeded`), but the *acquirer* would see two calls. A real integration sends a
+gateway-side idempotency key derived from the job id. Swapping in a broker does **not** fix
+this — SQS and Rabbit are at-least-once too.
+
+**Migrations are a deploy step, not app startup.** They auto-apply here only in Development.
+In production this is a migration job gated in the pipeline, so a rolling deploy can't have
+two versions racing to migrate.
+
+**Secrets.** The compose password and connection string are in plain config because they're
+local-only. Real deployment pulls them from a secrets manager into the environment.
+
+**Observability wiring.** Metrics are exposed in Prometheus text format at `/metrics`; a
+scrape config points a real Prometheus at it. Traces use `ActivitySource` with no exporter
+registered — adding an OTLP exporter is one config change. This is deliberately a set of
+seams rather than a shipped monitoring stack.
+
+**Idempotency keys are never swept.** The table grows forever. Production needs a TTL job
+(24h is typical) and an index on `created_at` to support it.
+
+**Dead-letter runbook.** A dead job leaves the payment `Captured` and visible in
+`settlement_dead_jobs`. There is deliberately no automatic replay — an operator should
+understand *why* five attempts failed before money moves. Alert on the gauge, not the
+counter: counters reset on restart and a real backlog would vanish with one.
+
+**Horizontal scaling.** The API is stateless. The worker is already safe to run N-up because
+`SKIP LOCKED` hands each job to exactly one claimer; the queue-depth gauge is the signal for
+when to add instances.
+
+**PCI scope.** Card data never touching the platform is what keeps scope near zero. In
+production that means a tokenization provider or network tokens — the same structural
+guarantee (no field to leak) rather than log scrubbing.
+
+## Observability
+
+- **Logs:** Serilog, compact JSON on stdout. `CorrelationIdMiddleware` reads or mints
+  `X-Correlation-Id`, echoes it, and pushes it into the logging scope. The id is persisted
+  onto audit rows *and* the settlement job, and re-established in the worker's log scope — so
+  grepping one id returns the API handler log, the request log, and the worker's settle log
+  for the same payment, across the async boundary. That's the point of persisting it rather
+  than passing it in memory.
+- **Metrics:** RED from `UseHttpMetrics()`, plus
+  `payments_{created,authorized,failed,captured,refunded,settled}_total`,
+  `settlement_attempts_total{outcome}`, `settlement_retries_total`,
+  `settlement_dead_lettered_total`, and the queue gauges `settlement_queue_depth`,
+  `settlement_lag_seconds`, `settlement_dead_jobs`. Label values are bounded to enums and
+  route templates — never ids or gateway error strings, which is how a metrics backend gets
+  taken down by its own instrumentation. Depth and lag are both exposed because depth alone
+  can't distinguish a healthy backlog from a stuck one.
+- **Traces:** an `ActivitySource` span per settlement job, tagged with the payment id and
+  correlation id. ASP.NET Core already emits activities for requests; a background loop has
+  none unless you make one.
+
+## Testing
+
+- **Domain unit tests** assert the full transition matrix, legal and illegal. Fast, no I/O,
+  and the highest-value tests in a payments system.
+- **Integration tests** run the real API against a throwaway Postgres (Testcontainers), so
+  they don't depend on anyone having run `docker compose up` and never touch data someone is
+  looking at. An in-memory provider would prove nothing here: `SKIP LOCKED`, unique-index
+  contention and `xmin` concurrency are all Postgres behaviour, and they're the only things
+  worth testing at that level. The two concurrency tests fire eight racing requests at one
+  idempotency key and assert exactly one did the work.
+- **Deliberately skipped:** contract tests (one consumer, and it lives in this repo), load
+  tests (they'd earn their keep once the connection-per-in-flight-payment tradeoff above
+  starts to bite), and browser E2E (the dashboard is thin enough that the integration tests
+  cover the logic worth protecting).
 
 ## Areas for future improvement
 
-_TODO._
+In the order I'd actually do them:
+
+1. **Gateway-side idempotency key on settlement** — closes the double-settle window
+   described above. Small, and it's the only known correctness gap.
+2. **Idempotency key TTL sweep** — the table grows unbounded.
+3. **Partial and multiple captures/refunds** — the real shape of the domain; the aggregate
+   would carry amounts per operation rather than a single status.
+4. **Reconciliation against the acquirer** — a daily job comparing settled payments to the
+   gateway's report. In a real system this, not the retry logic, is what catches the money
+   that actually went missing.
+5. **LISTEN/NOTIFY or a broker relay** — removes the polling latency floor once it matters.
+6. **Outbox → broker migration** — when settlement needs to scale independently or fan out
+   to other consumers.
