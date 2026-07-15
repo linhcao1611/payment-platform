@@ -1,11 +1,24 @@
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Payments.Api.Middleware;
 using Payments.Infrastructure;
 using Payments.Infrastructure.Gateway;
 using Payments.Infrastructure.Idempotency;
 using Payments.Worker;
+using Prometheus;
+using Serilog;
+using Serilog.Formatting.Compact;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// JSON to stdout, which is what a log shipper wants — no file sinks, no rotation, the
+// container runtime owns that. ReadFrom.Configuration keeps levels tunable per environment
+// without a redeploy. Card fields can't leak here by construction: the domain only ever
+// holds last4 and brand (see the PCI note on Payment).
+builder.Services.AddSerilog((_, cfg) => cfg
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .WriteTo.Console(new CompactJsonFormatter()));
 
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails();
@@ -28,6 +41,16 @@ builder.Services.Configure<SettlementOptions>(
     builder.Configuration.GetSection(SettlementOptions.SectionName));
 builder.Services.AddHostedService<SettlementWorker>();
 
+// /healthz is liveness: the process is up and can serve. Deliberately checks nothing else —
+// a liveness probe that depends on Postgres would have k8s kill every API pod during a
+// database blip, turning a recoverable incident into an outage.
+// /readyz is readiness: can this instance actually do useful work right now?
+builder.Services.AddHealthChecks()
+    .AddNpgSql(
+        builder.Configuration.GetConnectionString("Payments")!,
+        name: "postgres",
+        tags: ["ready"]);
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -42,7 +65,16 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseExceptionHandler();
+
+// Correlation first: everything downstream — request logs, handler logs, the audit rows and
+// the settlement job — must carry the same id, so the scope has to wrap them all.
 app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseSerilogRequestLogging();
+
+// RED for free: http_requests_received_total, http_request_duration_seconds,
+// http_requests_in_progress, labelled by method/endpoint/status — bounded because the label
+// is the route template, not the raw path (which would put payment ids in label values).
+app.UseHttpMetrics();
 
 if (app.Environment.IsDevelopment())
 {
@@ -51,6 +83,14 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
+
+app.MapHealthChecks("/healthz", new HealthCheckOptions { Predicate = _ => false });
+app.MapHealthChecks("/readyz", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") });
+
+// Prometheus text format. No collector ships with this: a scrape config or an OTLP exporter
+// is the one config change that connects it to a real stack — that's the seam, not a
+// pretending-to-be-production dashboard.
+app.MapMetrics();
 
 app.Run();
 

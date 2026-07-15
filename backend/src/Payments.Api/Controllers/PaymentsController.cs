@@ -8,6 +8,7 @@ using Payments.Domain;
 using Payments.Infrastructure;
 using Payments.Infrastructure.Gateway;
 using Payments.Infrastructure.Idempotency;
+using Payments.Infrastructure.Observability;
 
 namespace Payments.Api.Controllers;
 
@@ -99,8 +100,18 @@ public sealed class PaymentsController(
             },
             ct);
 
+        // Counted here rather than inside the work: this runs only once the transaction has
+        // committed, and `created` is null on a replay — so a client hammering retries moves
+        // the counter exactly once, the same as it moves the payment exactly once.
         if (created is not null)
+        {
+            PaymentsMetrics.Created.Inc();
+            (created.Status is PaymentStatus.Authorized
+                ? PaymentsMetrics.Authorized
+                : PaymentsMetrics.Failed).Inc();
+
             Response.Headers.Location = Url.Action(nameof(Get), new { id = created.Id });
+        }
 
         return Replayable(result);
     }
@@ -145,6 +156,9 @@ public sealed class PaymentsController(
             },
             ct);
 
+        if (!result.Replayed)
+            PaymentsMetrics.Captured.Inc();
+
         return Replayable(result);
     }
 
@@ -185,6 +199,9 @@ public sealed class PaymentsController(
                     StatusCodes.Status200OK, JsonSerializer.Serialize(PaymentResponse.From(payment), _json));
             },
             ct);
+
+        if (!result.Replayed)
+            PaymentsMetrics.Refunded.Inc();
 
         return Replayable(result);
     }

@@ -23,7 +23,13 @@ public interface ISettlementQueue
         int batchSize, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken ct);
 
     Task SaveAsync(CancellationToken ct);
+
+    /// <summary>Samples the queue's standing state for the gauges. Cheap enough to run per poll.</summary>
+    Task<SettlementQueueStats> GetStatsAsync(DateTimeOffset now, CancellationToken ct);
 }
+
+/// <param name="OldestPendingSeconds">Age of the oldest pending job; 0 when the queue is empty.</param>
+public sealed record SettlementQueueStats(int PendingCount, int DeadCount, double OldestPendingSeconds);
 
 public sealed class SettlementQueue(PaymentsDbContext db) : ISettlementQueue
 {
@@ -80,4 +86,29 @@ public sealed class SettlementQueue(PaymentsDbContext db) : ISettlementQueue
     }
 
     public Task SaveAsync(CancellationToken ct) => db.SaveChangesAsync(ct);
+
+    /// <summary>
+    /// One grouped scan plus one min(), rather than three counts. The index on
+    /// (status, next_attempt_at) covers it, and at exercise volumes this is noise next to
+    /// the claim itself — but the shape matters: a metrics query that table-scans on every
+    /// scrape is a classic way for observability to become the outage.
+    /// </summary>
+    public async Task<SettlementQueueStats> GetStatsAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        var counts = await db.SettlementJobs
+            .GroupBy(j => j.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var oldestPendingAt = await db.SettlementJobs
+            .Where(j => j.Status == SettlementJobStatus.Pending)
+            .MinAsync(j => (DateTimeOffset?)j.CreatedAt, ct);
+
+        return new SettlementQueueStats(
+            PendingCount: counts.FirstOrDefault(c => c.Status == SettlementJobStatus.Pending)?.Count ?? 0,
+            DeadCount: counts.FirstOrDefault(c => c.Status == SettlementJobStatus.Dead)?.Count ?? 0,
+            OldestPendingSeconds: oldestPendingAt is { } oldest
+                ? Math.Max(0, (now - oldest).TotalSeconds)
+                : 0);
+    }
 }

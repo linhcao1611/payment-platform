@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -6,6 +7,7 @@ using Payments.Domain;
 using Payments.Infrastructure;
 using Payments.Infrastructure.Entities;
 using Payments.Infrastructure.Gateway;
+using Payments.Infrastructure.Observability;
 
 namespace Payments.Worker;
 
@@ -26,6 +28,14 @@ public sealed class SettlementWorker(
     private const string Actor = "settlement-worker";
 
     private const int MaxErrorLength = 1024; // last_error column width
+
+    /// <summary>
+    /// The worker's tracing seam. ASP.NET Core emits activities for HTTP requests natively,
+    /// but nothing instruments a background loop — so this is where a span has to be created
+    /// by hand. No exporter is registered: pointing an OTLP collector at it is a config
+    /// change, and until then a null listener makes StartActivity a cheap no-op.
+    /// </summary>
+    public static readonly ActivitySource ActivitySource = new("Payments.Worker");
 
     private readonly SettlementOptions _options = options.Value;
 
@@ -87,6 +97,11 @@ public sealed class SettlementWorker(
 
         var jobs = await queue.ClaimDueAsync(_options.BatchSize, clock.GetUtcNow(), _options.LeaseDuration, ct);
 
+        // Sampled every poll, including empty ones — a queue that stops draining has to keep
+        // reporting its depth, and a gauge that only updates when there's work would freeze
+        // at its last value exactly when someone needs to see it climbing.
+        await PublishQueueGaugesAsync(queue, ct);
+
         foreach (var job in jobs)
         {
             ct.ThrowIfCancellationRequested();
@@ -109,6 +124,15 @@ public sealed class SettlementWorker(
         return jobs.Count;
     }
 
+    private async Task PublishQueueGaugesAsync(ISettlementQueue queue, CancellationToken ct)
+    {
+        var stats = await queue.GetStatsAsync(clock.GetUtcNow(), ct);
+
+        PaymentsMetrics.QueueDepth.Set(stats.PendingCount);
+        PaymentsMetrics.QueueLagSeconds.Set(stats.OldestPendingSeconds);
+        PaymentsMetrics.DeadJobs.Set(stats.DeadCount);
+    }
+
     private async Task ProcessAsync(
         SettlementJob job,
         ISettlementQueue queue,
@@ -126,6 +150,14 @@ public sealed class SettlementWorker(
             ["SettlementJobId"] = job.Id,
             ["Attempt"] = job.AttemptCount,
         });
+
+        // The span carries the same correlation id as the logs and the audit row, so a trace
+        // and a log line for one payment can be lined up without a join key being invented.
+        using var activity = ActivitySource.StartActivity("settle-payment", ActivityKind.Consumer);
+        activity?.SetTag("payment.id", job.PaymentId);
+        activity?.SetTag("settlement.job_id", job.Id);
+        activity?.SetTag("settlement.attempt", job.AttemptCount);
+        activity?.SetTag("correlation.id", job.CorrelationId);
 
         var payment = await payments.GetForSettlementAsync(job.PaymentId, ct);
         if (payment is null)
@@ -148,6 +180,7 @@ public sealed class SettlementWorker(
                 _ => (SettlementJobStatus.Cancelled, $"payment is {payment.Status}, no longer settleable"),
             };
 
+            activity?.SetTag("settlement.outcome", status.ToString());
             logger.LogInformation(
                 "Settlement job resolved as {JobStatus} without contacting the gateway: {Reason}", status, reason);
             await ResolveAsync(job, status, reason, queue, ct);
@@ -183,6 +216,11 @@ public sealed class SettlementWorker(
         // cannot be marked done unless the payment really reached Settled.
         await payments.SaveAsync(payment, ct);
 
+        // After the commit, for the same reason the API counts after its transaction.
+        PaymentsMetrics.Settled.Inc();
+        PaymentsMetrics.SettlementAttempts.WithLabels("succeeded").Inc();
+        activity?.SetTag("settlement.outcome", "succeeded");
+
         logger.LogInformation("Payment settled on attempt {Attempt}", job.AttemptCount);
     }
 
@@ -192,14 +230,17 @@ public sealed class SettlementWorker(
         var now = clock.GetUtcNow();
         job.LastError = Truncate(error);
 
+        PaymentsMetrics.SettlementAttempts.WithLabels("failed").Inc();
+
         if (job.AttemptCount >= _options.MaxAttempts)
         {
             job.Status = SettlementJobStatus.Dead;
             job.CompletedAt = now;
+            PaymentsMetrics.SettlementDeadLettered.Inc();
 
             // The answer to "what happens when settlement fails five times at 2am": the payment
-            // stays Captured, the row is queryable, and slice 6 scrapes a counter off it. Money
-            // is never silently lost — it's parked where an operator can find it.
+            // stays Captured, the row is queryable, and settlement_dead_jobs makes it alertable.
+            // Money is never silently lost — it's parked where an operator can find it.
             logger.LogError(
                 "Settlement job dead-lettered after {Attempt} attempts: {LastError}",
                 job.AttemptCount, job.LastError);
@@ -209,6 +250,7 @@ public sealed class SettlementWorker(
             var delay = SettlementBackoff.Compute(job.AttemptCount, _options, Random.Shared.NextDouble());
             job.Status = SettlementJobStatus.Pending;
             job.NextAttemptAt = now + delay;
+            PaymentsMetrics.SettlementRetries.Inc();
 
             logger.LogWarning(
                 "Settlement attempt {Attempt} failed ({LastError}); retrying in {Delay}",
@@ -225,6 +267,12 @@ public sealed class SettlementWorker(
         job.LastError = Truncate(reason);
         job.CompletedAt = clock.GetUtcNow();
         await queue.SaveAsync(ct);
+
+        // A cancelled job is a normal outcome, not a failure — keeping it out of the failed
+        // bucket is what stops a refund-heavy day from looking like a settlement incident.
+        PaymentsMetrics.SettlementAttempts
+            .WithLabels(status == SettlementJobStatus.Succeeded ? "succeeded" : "cancelled")
+            .Inc();
     }
 
     private static string Truncate(string value) =>
