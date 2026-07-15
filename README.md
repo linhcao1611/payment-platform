@@ -74,6 +74,46 @@ FakeGateway__AuthorizeDeclineRate=0 FakeGateway__SettleFailureRate=0 \
 
 A card token ending in `-declined` always declines, whatever the rate.
 
+### Inspecting the database
+
+Postgres is published on host port **5433** either way. Credentials are in `docker-compose.yml`
+and are local-only, never a real secret:
+
+```
+postgresql://payments:payments_dev@localhost:5433/payments
+```
+
+Paste that into any client (TablePlus, DBeaver, pgAdmin, DataGrip), or use the container's own
+`psql` and install nothing:
+
+```bash
+docker compose exec postgres psql -U payments -d payments      # interactive; \dt lists tables, \q quits
+docker compose exec -T postgres psql -U payments -d payments -c "SELECT status, count(*) FROM payments GROUP BY 1;"
+```
+
+Four tables, and three queries that show what this system is actually about:
+
+```sql
+-- The audit trail for one payment. Note the Settled row's actor is settlement-worker,
+-- and its correlation_id matches the Captured row's — the worker read that id back off
+-- the job it claimed, so the async leg is traceable to the request that caused it.
+SELECT from_status, to_status, actor, correlation_id, occurred_at
+FROM payment_transitions WHERE payment_id = '<id>' ORDER BY occurred_at;
+
+-- The outbox. Written in the same transaction as the Captured transition, drained by the
+-- worker with FOR UPDATE SKIP LOCKED. last_error and attempt_count are the retry story;
+-- a Dead row is a payment parked for an operator.
+SELECT status, attempt_count, next_attempt_at, last_error, correlation_id FROM settlement_jobs;
+
+-- Stored idempotency responses. response_body is replayed verbatim on a retry;
+-- request_hash is what makes a reused key with a different payload a 409.
+SELECT operation, key, request_hash, response_status_code FROM idempotency_keys;
+```
+
+The data lives in a Docker volume (`payment-platform_pgdata`), so it survives
+`docker compose down` but not `down -v` — that's the reset if you want the demo profile to
+re-seed a clean database.
+
 ## Architecture
 
 ```
