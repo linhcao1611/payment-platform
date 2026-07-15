@@ -242,8 +242,21 @@ public sealed class PaymentsController(
         var pageSize = Math.Clamp(request.PageSize, 1, MaxPageSize);
         var page = Math.Max(request.Page, 1);
 
+        // Normalized to UTC at the boundary. Npgsql refuses to bind a DateTimeOffset with a
+        // non-zero offset to `timestamp with time zone`, so a caller sending its own local
+        // offset — a browser in Berlin sending +02:00, or a bare yyyy-MM-dd that model binding
+        // stamps with the *server's* offset — would otherwise 500 deep in the query. The
+        // instant is preserved; only the offset changes, which is all the column stores anyway.
         var result = await payments.ListAsync(
-            new PaymentQuery(merchantId, status, request.From, request.To, request.Search, page, pageSize), ct);
+            new PaymentQuery(
+                merchantId,
+                status,
+                request.From?.ToUniversalTime(),
+                request.To?.ToUniversalTime(),
+                request.Search,
+                page,
+                pageSize),
+            ct);
 
         return Ok(new PagedResponse<PaymentResponse>(
             result.Items.Select(PaymentResponse.From).ToList(),
