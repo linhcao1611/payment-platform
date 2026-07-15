@@ -3,6 +3,7 @@ using Payments.Api.Middleware;
 using Payments.Infrastructure;
 using Payments.Infrastructure.Gateway;
 using Payments.Infrastructure.Idempotency;
+using Payments.Worker;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -20,6 +21,12 @@ builder.Services.AddScoped<ISettlementQueue, SettlementQueue>();
 builder.Services.Configure<FakeGatewayOptions>(
     builder.Configuration.GetSection(FakeGatewayOptions.SectionName));
 builder.Services.AddSingleton<IPaymentGateway, FakePaymentGateway>();
+
+// The settlement worker rides in the API process today. It is a project reference, not a
+// class here, so promoting it to its own deployment is a hosting change rather than a rewrite.
+builder.Services.Configure<SettlementOptions>(
+    builder.Configuration.GetSection(SettlementOptions.SectionName));
+builder.Services.AddHostedService<SettlementWorker>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

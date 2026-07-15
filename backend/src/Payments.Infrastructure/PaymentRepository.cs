@@ -6,6 +6,15 @@ namespace Payments.Infrastructure;
 public interface IPaymentRepository
 {
     Task<Payment?> GetAsync(Guid id, string merchantId, CancellationToken ct);
+
+    /// <summary>
+    /// Unscoped lookup for the settlement worker, which acts on behalf of the platform
+    /// rather than a merchant and only ever reaches payments via a job row it claimed.
+    /// Kept separate from <see cref="GetAsync"/> so the merchant-scoping rule on every
+    /// API-facing query stays impossible to forget.
+    /// </summary>
+    Task<Payment?> GetForSettlementAsync(Guid id, CancellationToken ct);
+
     Task<IReadOnlyList<PaymentTransition>> GetTransitionsAsync(Guid paymentId, CancellationToken ct);
     void Add(Payment payment);
 
@@ -20,6 +29,9 @@ public sealed class PaymentRepository(PaymentsDbContext db) : IPaymentRepository
 {
     public Task<Payment?> GetAsync(Guid id, string merchantId, CancellationToken ct) =>
         db.Payments.FirstOrDefaultAsync(p => p.Id == id && p.MerchantId == merchantId, ct);
+
+    public Task<Payment?> GetForSettlementAsync(Guid id, CancellationToken ct) =>
+        db.Payments.FirstOrDefaultAsync(p => p.Id == id, ct);
 
     public async Task<IReadOnlyList<PaymentTransition>> GetTransitionsAsync(Guid paymentId, CancellationToken ct) =>
         await db.PaymentTransitions

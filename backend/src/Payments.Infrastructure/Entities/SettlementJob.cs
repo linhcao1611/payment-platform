@@ -6,6 +6,13 @@ public enum SettlementJobStatus
     Processing,
     Succeeded,
     Dead,
+
+    /// <summary>
+    /// The job became moot before it ran — the payment was refunded between capture and
+    /// settlement, so there is nothing to settle. Distinct from Dead: nothing failed and
+    /// no operator needs to look at it. Free to add because status is stored as text.
+    /// </summary>
+    Cancelled,
 }
 
 /// <summary>
