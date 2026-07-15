@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using Payments.Api.Demo;
 using Payments.Api.Middleware;
 using Payments.Infrastructure;
 using Payments.Infrastructure.Gateway;
@@ -34,6 +35,12 @@ builder.Services.AddScoped<ISettlementQueue, SettlementQueue>();
 builder.Services.Configure<FakeGatewayOptions>(
     builder.Configuration.GetSection(FakeGatewayOptions.SectionName));
 builder.Services.AddSingleton<IPaymentGateway, FakePaymentGateway>();
+
+// Registered before the worker so it runs first: hosted services start in registration order,
+// and the seeded captures should be in the queue before anything drains it. Off by default —
+// the compose demo profile is the only thing that turns it on.
+builder.Services.Configure<DemoOptions>(builder.Configuration.GetSection(DemoOptions.SectionName));
+builder.Services.AddHostedService<DemoDataSeeder>();
 
 // The settlement worker rides in the API process today. It is a project reference, not a
 // class here, so promoting it to its own deployment is a hosting change rather than a rewrite.

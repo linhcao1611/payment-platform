@@ -1,3 +1,13 @@
+# Two ways to run this:
+#
+#   docker compose up -d                      Postgres only — the inner dev loop, where the API
+#                                             and dashboard run on the host with hot reload.
+#   docker compose --profile demo up --build  The whole stack. Nothing needed on the host but
+#                                             Docker: no .NET SDK, no Node.
+#
+# The `demo` profile is what makes both work from one file: services carrying a profile stay
+# out of a plain `up`, so adding the demo path costs the dev workflow nothing.
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -15,6 +25,54 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  api:
+    profiles: [demo]
+    build: ./backend
+    container_name: payments-api
+    environment:
+      # Inside the compose network Postgres is `postgres:5432`; the 5433 mapping above is only
+      # for host tools.
+      ConnectionStrings__Payments: "Host=postgres;Port=5432;Database=payments;Username=payments;Password=payments_dev"
+      ASPNETCORE_URLS: "http://+:8080"
+      # Development on purpose, for the demo's sake: it applies migrations on startup and
+      # serves Swagger, so a reviewer gets a working, explorable API from one command. The
+      # README is explicit that production runs migrations as a gated deploy step instead.
+      ASPNETCORE_ENVIRONMENT: Development
+      # The gateway's random declines make the failure paths demonstrable but a scripted demo
+      # unpredictable. Settlement still fails 20% of the time so retries and backoff are
+      # visible in the logs; authorization always approves so a walkthrough doesn't get a
+      # surprise decline. Override either at `up` time to show the other path.
+      FakeGateway__AuthorizeDeclineRate: "0"
+      # Create is API-only — the dashboard has no "new payment" form — so without this a
+      # reviewer's first view is an empty table they can't populate. Seeds a spread of
+      # payments (several left Authorized, so there's something to press Capture on) once,
+      # only into an empty database.
+      Demo__Seed: "true"
+    ports:
+      - "5080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # Liveness only, matching what /healthz means: the process is up. Readiness (/readyz)
+      # checks Postgres, which depends_on already guarantees here.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  frontend:
+    profiles: [demo]
+    build: ./frontend
+    container_name: payments-dashboard
+    ports:
+      # Same port as `npm run dev`, so the docs only ever name one address for the dashboard.
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

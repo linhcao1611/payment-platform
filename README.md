@@ -7,36 +7,65 @@ see [docs/PLAN.md](docs/PLAN.md) for the implementation plan.
 The brief asks for judgment rather than feature count, so this README spends most of its
 words on **why** things are the way they are, and on what is deliberately missing.
 
-## Setup
+## Run it
+
+### The whole stack, one command (only Docker needed)
+
+```bash
+docker compose --profile demo up --build
+```
+
+That's it — no .NET SDK, no Node. It builds the API and the dashboard, waits for Postgres to
+be healthy, applies migrations, and starts the settlement worker.
+
+- **Dashboard: http://localhost:5173** ← start here
+- API: http://localhost:5080 (Swagger at `/swagger`)
+- Metrics: http://localhost:5080/metrics — Health: `/healthz`, `/readyz`
+
+**What you'll see.** The profile seeds a dozen payments into an empty database — creating a
+payment is an API-only operation, so without seed data the first view would be an empty table.
+Several are left `Authorized`: open one, press **Capture**, and watch the status timeline grow
+to `Settled` on its own a second later as the background worker picks the job up. That single
+click exercises the state machine, the idempotency key, the transactional outbox, the audit
+trail and the async worker at once. The seeded payments are created through the real aggregate,
+so each has a genuine audit trail. Seeding runs once and skips a database that already has
+payments.
+
+The dashboard is served by nginx, which also proxies `/api`, `/swagger` and `/metrics` to the
+API container — so everything is reachable from one origin. Authorization is pinned to always
+approve in this profile so a walkthrough doesn't hit a random decline; settlement still fails
+~20% of the time, so retries and backoff are visible in `docker compose logs api`. To see the
+decline path, use a card token ending in `-declined`, or override the rate:
+
+```bash
+FakeGateway__AuthorizeDeclineRate=0.5 docker compose --profile demo up --build
+```
+
+Tear down with `docker compose --profile demo down` (add `-v` to drop the database volume).
+
+### The dev loop (hot reload)
 
 Prerequisites: .NET 10 SDK, Node 20+, Docker.
 
 ```bash
-# 1. Start Postgres
-docker compose up -d
-
-# 2. Run the API (applies EF migrations on startup in Development)
-cd backend
-dotnet run --project src/Payments.Api
-
-# 3. Run the dashboard
-cd frontend
-npm install
-npm run dev
+docker compose up -d                          # Postgres only — services in the demo profile stay out
+cd backend && dotnet run --project src/Payments.Api    # API on :5080, migrates on startup
+cd frontend && npm install && npm run dev              # dashboard on :5173
 ```
 
-- API: http://localhost:5080 (Swagger at `/swagger`)
-- Dashboard: http://localhost:5173
-- Metrics: http://localhost:5080/metrics — Health: `/healthz`, `/readyz`
-- Postgres: `localhost:5433` (host port 5433 to avoid clashing with a local Postgres on 5432)
+Postgres is on host port **5433** to avoid clashing with a local Postgres on 5432.
+
+> The two paths use the same ports, so run one or the other. If a host dev server and the demo
+> stack are both up, `localhost` may resolve to whichever bound IPv6 first — stop one before
+> starting the other.
 
 ```bash
-# Run tests (integration tests start their own Postgres via Testcontainers — Docker must be up)
+# Tests (integration tests start their own Postgres via Testcontainers — Docker must be running)
 cd backend && dotnet test
 ```
 
-The fake gateway declines ~15% of authorizations and fails ~20% of settlements by default,
-so the failure paths are demonstrable by hand. To make a demo deterministic:
+Outside the demo profile the fake gateway declines ~15% of authorizations and fails ~20% of
+settlements, so the failure paths are demonstrable by hand. To make a run deterministic:
 
 ```bash
 FakeGateway__AuthorizeDeclineRate=0 FakeGateway__SettleFailureRate=0 \

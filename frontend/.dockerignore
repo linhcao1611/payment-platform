@@ -1,0 +1,5 @@
+# node_modules is reinstalled from the lockfile inside the image; copying the host's would be
+# slow and can carry the wrong platform's native binaries.
+node_modules/
+dist/
+.vite/

@@ -1,0 +1,5 @@
+# Keep the build context small, and never let host build output shadow the container's.
+**/bin/
+**/obj/
+tests/
+*.user
