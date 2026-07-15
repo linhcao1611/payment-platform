@@ -19,7 +19,7 @@ That's it — no .NET SDK, no Node. It builds the API and the dashboard, waits f
 be healthy, applies migrations, and starts the settlement worker.
 
 - **Dashboard: http://localhost:5173** ← start here
-- API: http://localhost:5080 (Swagger at `/swagger`)
+- API: http://localhost:5080 — opens Swagger, where every endpoint can be tried directly
 - Metrics: http://localhost:5080/metrics — Health: `/healthz`, `/readyz`
 
 **What you'll see.** The profile seeds a dozen payments into an empty database — creating a

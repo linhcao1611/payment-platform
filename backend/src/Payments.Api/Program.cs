@@ -87,6 +87,13 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+
+    // Nothing is mapped at the root, so anyone who types the API's base URL — which is what
+    // the README and every demo instinct point at — would get a bare 404 and reasonably
+    // conclude the thing is broken. Send them to the API explorer instead. Scoped to
+    // Development because that is exactly where Swagger is mounted; in production an
+    // unmapped root correctly stays a 404.
+    app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 }
 
 app.MapControllers();
