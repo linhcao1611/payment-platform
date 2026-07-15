@@ -8,6 +8,7 @@ using Payments.Infrastructure.Idempotency;
 using Payments.Worker;
 using Prometheus;
 using Serilog;
+using Serilog.Events;
 using Serilog.Formatting.Compact;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -76,7 +77,28 @@ app.UseExceptionHandler();
 // Correlation first: everything downstream — request logs, handler logs, the audit rows and
 // the settlement job — must carry the same id, so the scope has to wrap them all.
 app.UseMiddleware<CorrelationIdMiddleware>();
-app.UseSerilogRequestLogging();
+
+app.UseSerilogRequestLogging(options =>
+{
+    // Infrastructure traffic is relentless and says nothing: a k8s probe hits /healthz and
+    // /readyz every few seconds per pod, and Prometheus scrapes /metrics on its own schedule,
+    // forever. Logged at Information they drown the events that matter — locally they were 77%
+    // of the stream — and in production you pay to ingest every one of them.
+    //
+    // Dropped only while they succeed. A failing probe is exactly the thing you need in the
+    // log, so anything that throws or 5xxs is still an Error, whatever the path.
+    options.GetLevel = (httpContext, _, exception) =>
+        exception is not null || httpContext.Response.StatusCode >= 500
+            ? LogEventLevel.Error
+            : IsInfrastructureEndpoint(httpContext.Request.Path)
+                ? LogEventLevel.Verbose // below the configured minimum, so it never reaches a sink
+                : LogEventLevel.Information;
+});
+
+static bool IsInfrastructureEndpoint(PathString path) =>
+    path.StartsWithSegments("/healthz")
+    || path.StartsWithSegments("/readyz")
+    || path.StartsWithSegments("/metrics");
 
 // RED for free: http_requests_received_total, http_request_duration_seconds,
 // http_requests_in_progress, labelled by method/endpoint/status — bounded because the label

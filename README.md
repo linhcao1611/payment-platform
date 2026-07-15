@@ -339,12 +339,26 @@ guarantee (no field to leak) rather than log scrubbing.
 
 ## Observability
 
-- **Logs:** Serilog, compact JSON on stdout. `CorrelationIdMiddleware` reads or mints
-  `X-Correlation-Id`, echoes it, and pushes it into the logging scope. The id is persisted
-  onto audit rows *and* the settlement job, and re-established in the worker's log scope — so
-  grepping one id returns the API handler log, the request log, and the worker's settle log
-  for the same payment, across the async boundary. That's the point of persisting it rather
-  than passing it in memory.
+- **Logs:** Serilog, compact JSON on stdout — no file sinks, no rotation; the container
+  runtime owns collection. View them with `docker compose logs -f api`, or on the console of
+  `dotnet run`. Each line keeps the message *template* in `@mt` with the values as separate
+  fields (`PaymentId`, `MerchantId`, `CorrelationId`), which is what makes them queryable
+  rather than greppable prose. Levels are tuned in the `Serilog` config section.
+- **Correlation:** `CorrelationIdMiddleware` reads or mints `X-Correlation-Id`, echoes it, and
+  pushes it into the logging scope. The id is persisted onto audit rows *and* the settlement
+  job, and re-established in the worker's log scope — so grepping one id returns the API
+  handler log, the request log, and the worker's settle log for the same payment, across the
+  async boundary. That's the point of persisting it rather than passing it in memory:
+
+  ```bash
+  docker compose logs api | grep <correlation-id>
+  ```
+- **Probe noise is dropped, failures aren't.** Successful `/healthz`, `/readyz` and `/metrics`
+  requests log at `Verbose`, below the sink's minimum. Left at `Information` they were 77% of
+  the local log stream — a k8s probe hits every pod every few seconds forever, and that is both
+  an unreadable log and a real ingest bill. Anything that throws or returns 5xx is still an
+  `Error` whatever the path, so a failing readiness check — the one probe you must not miss —
+  is still there.
 - **Metrics:** RED from `UseHttpMetrics()`, plus
   `payments_{created,authorized,failed,captured,refunded,settled}_total`,
   `settlement_attempts_total{outcome}`, `settlement_retries_total`,
