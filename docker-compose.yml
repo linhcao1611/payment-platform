@@ -45,10 +45,12 @@ services:
       # surprise decline. Override either at `up` time to show the other path.
       FakeGateway__AuthorizeDeclineRate: "0"
       # Create is API-only — the dashboard has no "new payment" form — so without this a
-      # reviewer's first view is an empty table they can't populate. Seeds a spread of
-      # payments (several left Authorized, so there's something to press Capture on) once,
-      # only into an empty database.
+      # reviewer's first view is an empty table they can't populate. Seeds a week of plausible
+      # history (several payments left Authorized, so there's something to press Capture on)
+      # once, only into an empty database.
       Demo__Seed: "true"
+      Demo__Days: "7"
+      Demo__PaymentsPerDay: "70"
     ports:
       - "5080:8080"
     depends_on:

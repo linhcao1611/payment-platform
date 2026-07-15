@@ -22,14 +22,32 @@ be healthy, applies migrations, and starts the settlement worker.
 - API: http://localhost:5080 — opens Swagger, where every endpoint can be tried directly
 - Metrics: http://localhost:5080/metrics — Health: `/healthz`, `/readyz`
 
-**What you'll see.** The profile seeds a dozen payments into an empty database — creating a
-payment is an API-only operation, so without seed data the first view would be an empty table.
-Several are left `Authorized`: open one, press **Capture**, and watch the status timeline grow
-to `Settled` on its own a second later as the background worker picks the job up. That single
-click exercises the state machine, the idempotency key, the transactional outbox, the audit
-trail and the async worker at once. The seeded payments are created through the real aggregate,
-so each has a genuine audit trail. Seeding runs once and skips a database that already has
-payments.
+**What you'll see.** The profile seeds **a week of history — around 400 payments** — into an
+empty database. Creating a payment is an API-only operation, so without seed data the first
+view would be an empty table with no way to fill it.
+
+The history is shaped rather than random: busy in the working day, dead overnight, lighter at
+weekends, with a long tail of small baskets and the occasional large one. That's what makes the
+list, the status filters, the date range and 40 pages of paging worth looking at.
+
+A dozen or so are left `Authorized`. Open one, press **Capture**, and watch the status timeline
+grow to `Settled` on its own a second later as the worker picks the job up — one click
+exercising the state machine, the idempotency key, the transactional outbox, the audit trail
+and the async worker together.
+
+Some deliberate details in there: one payment is stuck `Captured` behind a **dead-lettered**
+settlement job (five attempts, `acquirer timeout`) — that's the 2am scenario sitting in the
+data, queryable and, with the observability profile, alertable. Some jobs are `Cancelled`
+because the payment was refunded before settlement ran, and ~20% of successful settlements took
+a retry, so `settlement_jobs` looks like a real outbox rather than a clean one.
+
+Every seeded payment goes through the real aggregate, so each has a genuine audit trail with
+correlation ids — no rows conjured straight into the table. It runs once and skips a database
+that already has payments. Tune with `Demo__Days` and `Demo__PaymentsPerDay`.
+
+The seeder deliberately does **not** touch the metrics: those counters live in the request path,
+so Prometheus only ever shows traffic that really happened. Fabricated throughput graphs would
+be a lie.
 
 The dashboard is served by nginx, which also proxies `/api`, `/swagger` and `/metrics` to the
 API container — so everything is reachable from one origin. Authorization is pinned to always
