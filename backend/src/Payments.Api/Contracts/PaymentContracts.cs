@@ -19,6 +19,30 @@ public sealed record CreatePaymentRequest(
 public sealed record RefundRequest(string? Reason);
 
 /// <summary>
+/// Query string for the list endpoint. Bound with [FromQuery]; every field is optional so
+/// the bare URL returns a sensible first page.
+/// </summary>
+public sealed record ListPaymentsRequest
+{
+    public string? Status { get; init; }
+    public DateTimeOffset? From { get; init; }
+    public DateTimeOffset? To { get; init; }
+
+    /// <summary>Full or partial payment id.</summary>
+    public string? Search { get; init; }
+
+    public int Page { get; init; } = 1;
+    public int PageSize { get; init; } = 20;
+}
+
+public sealed record PagedResponse<T>(
+    IReadOnlyList<T> Items,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages);
+
+/// <summary>
 /// Capture carries no client body, and refund carries only a reason — so what gets
 /// fingerprinted for idempotency is the command these actions actually represent.
 /// The target payment id must be part of it: without it, one key would replay across

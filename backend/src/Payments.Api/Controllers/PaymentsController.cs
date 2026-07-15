@@ -206,6 +206,53 @@ public sealed class PaymentsController(
         return Replayable(result);
     }
 
+    /// <summary>Maximum page size. A caller asking for more gets this, not an error.</summary>
+    private const int MaxPageSize = 100;
+
+    [HttpGet]
+    [ProducesResponseType<PagedResponse<PaymentResponse>>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> List([FromQuery] ListPaymentsRequest request, CancellationToken ct)
+    {
+        if (MerchantId is not { } merchantId)
+            return MissingMerchant();
+
+        PaymentStatus? status = null;
+        if (!string.IsNullOrWhiteSpace(request.Status))
+        {
+            if (!Enum.TryParse<PaymentStatus>(request.Status, ignoreCase: true, out var parsed))
+                return ProblemWithCode(
+                    StatusCodes.Status400BadRequest,
+                    "Invalid status filter",
+                    $"'{request.Status}' is not a payment status. Valid values: {string.Join(", ", Enum.GetNames<PaymentStatus>())}.",
+                    "invalid_status");
+
+            status = parsed;
+        }
+
+        if (request.From is { } from && request.To is { } to && from > to)
+            return ProblemWithCode(
+                StatusCodes.Status400BadRequest,
+                "Invalid date range",
+                "'from' must not be later than 'to'.",
+                "invalid_date_range");
+
+        // Clamped rather than rejected: a client asking for 10,000 rows gets 100, not a 400.
+        // The cap exists so one caller can't ask the database for the whole table.
+        var pageSize = Math.Clamp(request.PageSize, 1, MaxPageSize);
+        var page = Math.Max(request.Page, 1);
+
+        var result = await payments.ListAsync(
+            new PaymentQuery(merchantId, status, request.From, request.To, request.Search, page, pageSize), ct);
+
+        return Ok(new PagedResponse<PaymentResponse>(
+            result.Items.Select(PaymentResponse.From).ToList(),
+            result.Page,
+            result.PageSize,
+            result.TotalCount,
+            TotalPages: (int)Math.Ceiling(result.TotalCount / (double)result.PageSize)));
+    }
+
     [HttpGet("{id:guid}")]
     [ProducesResponseType<PaymentResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
