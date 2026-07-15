@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Payments.Api.Middleware;
 using Payments.Infrastructure;
 using Payments.Infrastructure.Gateway;
+using Payments.Infrastructure.Idempotency;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,6 +15,8 @@ builder.Services.AddDbContext<PaymentsDbContext>(o =>
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
+builder.Services.AddScoped<IIdempotencyStore, IdempotencyStore>();
+builder.Services.AddScoped<ISettlementQueue, SettlementQueue>();
 builder.Services.Configure<FakeGatewayOptions>(
     builder.Configuration.GetSection(FakeGatewayOptions.SectionName));
 builder.Services.AddSingleton<IPaymentGateway, FakePaymentGateway>();

@@ -15,6 +15,19 @@ public sealed record CreatePaymentRequest(
     string CardBrand,
     string? Description);
 
+/// <summary>Refunds are full-amount only; partial refunds are out of scope (see README).</summary>
+public sealed record RefundRequest(string? Reason);
+
+/// <summary>
+/// Capture carries no client body, and refund carries only a reason — so what gets
+/// fingerprinted for idempotency is the command these actions actually represent.
+/// The target payment id must be part of it: without it, one key would replay across
+/// different payments.
+/// </summary>
+internal sealed record CaptureCommand(Guid PaymentId);
+
+internal sealed record RefundCommand(Guid PaymentId, string? Reason);
+
 public sealed record PaymentResponse(
     Guid Id,
     string MerchantId,

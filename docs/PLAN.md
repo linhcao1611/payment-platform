@@ -1,6 +1,6 @@
 # Payment Platform Exercise — Implementation Plan
 
-**Stack:** .NET 8 (ASP.NET Core Web API), React + TypeScript (Vite), Postgres via docker-compose, in-process background worker.
+**Stack:** .NET 10 (ASP.NET Core Web API), React + TypeScript (Vite), Postgres via docker-compose, in-process background worker.
 **Timebox:** ~1 day. Depth over breadth — one clean vertical slice with a strong operational narrative.
 
 ---
