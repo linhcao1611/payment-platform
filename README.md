@@ -76,6 +76,15 @@ the settlement queue (depth, lag, dead-letter backlog), the payment lifecycle, R
 panel with a **Search logs** box at the top — paste a correlation id into it and you get one
 payment's whole journey, including the worker settling it seconds later on another thread.
 
+**Metrics only cover live traffic — keep the time range short (15–30 minutes).** They are
+counters in the request path, so they measure what the process actually served since it
+started. The demo profile's seeded week lives in Postgres, not in Prometheus: it shows up in
+the payments dashboard and in SQL, but not on these graphs. That is deliberate. Backfilling
+invented throughput would make every number on the dashboard unfalsifiable, and a seven-day
+window on a stack that booted five minutes ago is empty for the same honest reason. To make the
+graphs move, capture a payment. `Dead-lettered jobs` showing **1** is expected — the seeder
+plants one stuck payment so the alerting path is real rather than hypothetical.
+
 The point of it being a separate profile: **the application does not change to make any of
 this work.** It writes JSON to stdout and exposes `/metrics`, exactly as it does without this
 profile. Alloy discovers containers and ships their stdout to Loki; Prometheus scrapes the

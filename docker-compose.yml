@@ -88,6 +88,9 @@ services:
     image: grafana/loki:3.4.2
     container_name: payments-loki
     command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      # Same reason as Prometheus: keep the logs across a restart.
+      - lokidata:/loki
     healthcheck:
       test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:3100/ready || exit 1"]
       interval: 5s
@@ -117,9 +120,14 @@ services:
     container_name: payments-prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.retention.time=6h
+      # 15 days, and on a volume: without persistence every `compose restart` silently threw
+      # away the history, so the graphs only ever covered the minutes since the last restart.
+      # Metrics still only cover live traffic — the seeded week is in Postgres, not here — but
+      # at least a demo now survives restarting the API.
+      - --storage.tsdb.retention.time=15d
     volumes:
       - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
     ports:
       - "9090:9090"
 
@@ -148,3 +156,5 @@ services:
 
 volumes:
   pgdata:
+  promdata:
+  lokidata:
