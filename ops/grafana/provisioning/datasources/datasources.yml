@@ -19,3 +19,25 @@ datasources:
     type: loki
     access: proxy
     url: http://loki:3100
+    jsonData:
+      # Every request log line carries the W3C trace id as "@tr". This regex lifts it into a
+      # TraceID link, so a log line jumps straight to its span waterfall in Tempo — logs and
+      # traces joined without the app doing anything beyond what it already logged.
+      derivedFields:
+        - name: TraceID
+          matcherRegex: '"@tr":"([0-9a-f]+)"'
+          url: "$${__value.raw}"
+          datasourceUid: payments-tempo
+
+  - name: Tempo
+    uid: payments-tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    jsonData:
+      # The reverse hop: from a span back to the logs around it.
+      tracesToLogsV2:
+        datasourceUid: payments-loki
+        spanStartTimeShift: "-5m"
+        spanEndTimeShift: "5m"
+        filterByTraceID: true

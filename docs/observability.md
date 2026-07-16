@@ -33,4 +33,10 @@
   can't distinguish a healthy backlog from a stuck one.
 - **Traces:** an `ActivitySource` span per settlement job, tagged with the payment id and
   correlation id. ASP.NET Core already emits activities for requests; a background loop has
-  none unless you make one.
+  none unless you make one. Under the observability profile these export to **Tempo** and
+  render in Grafana (Explore → Tempo, or Drilldown → Traces): request waterfalls plus
+  `settle-payment` spans carrying `payment.id`, `settlement.attempt` and
+  `settlement.outcome`. Every request log line carries the trace id as `@tr`, and the Loki
+  datasource lifts it into a **TraceID** link — log line to span waterfall in one click, and
+  the Tempo datasource links back from spans to the surrounding logs. Without the profile
+  (dev loop, tests) the exporter never registers and the spans stay no-ops.

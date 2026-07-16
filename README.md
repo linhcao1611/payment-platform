@@ -90,6 +90,8 @@ docker compose --profile demo --profile observability up --build
 - **Grafana: http://localhost:3000** — opens straight on the *Payments — overview* dashboard,
   no login (anonymous admin; local demo only)
 - Prometheus: http://localhost:9090
+- Traces: Tempo, inside Grafana (Explore → Tempo, or click the **TraceID** button on any log
+  line) — request waterfalls plus the worker's `settle-payment` spans
 
 Everything is provisioned: datasources, the dashboard, the scrape config. The dashboard has
 the settlement queue (depth, lag, dead-letter backlog), the payment lifecycle, RED, and a log

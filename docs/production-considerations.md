@@ -32,13 +32,19 @@ not an application one.
 as JSON on stdout; the `observability` compose profile (see the README’s *Run it* section) points a real
 Grafana/Prometheus/Loki at
 both without touching a line of application code, which is the property that matters. Traces
-use `ActivitySource` with no exporter registered. Wiring real spans is a small, well-known
-change — three OpenTelemetry packages and about a dozen lines in `Program.cs` registering the
-`Payments.Worker` source alongside the ASP.NET one, plus a Tempo or Jaeger container to send
-them to — not literally one line of config, and the docs shouldn't pretend otherwise. The
-point stands, though: it's additive wiring at the composition root; no instrumented code
-changes. The default stack ships seams, not a monitoring platform, because the seams are the
-part that has to be right.
+are wired but dormant by default: OpenTelemetry registers only when
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set. The observability profile points it at Tempo and gets
+span waterfalls in Grafana; the dev loop and the tests leave it unset and pay nothing.
+Lighting the seam changed no instrumented code — the ASP.NET request activities and the
+worker's `ActivitySource` were already being emitted, just to nobody — which was the claim
+all along, and is now demonstrated rather than promised. Probe and scrape requests don't earn
+spans, by the same rule that keeps them out of the request logs.
+
+One trace gap is deliberate and worth naming: the worker's spans start *new* traces rather
+than continuing the capture's, because W3C trace context is not persisted across the queue.
+The correlation id is — that's the join key between the two traces — and carrying
+`traceparent` on the job row the same way would stitch them into one. The default stack still
+ships seams, not a monitoring platform, because the seams are the part that has to be right.
 
 **Idempotency keys are never swept, and neither are settlement jobs.** Both tables grow
 forever. Keys need a TTL job (24h is typical) and an index on `created_at`; terminal

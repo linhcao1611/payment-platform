@@ -57,6 +57,11 @@ services:
       # unfalsifiable. So the demo earns its data instead. Set Enabled=false for a still table.
       DemoTraffic__Enabled: "true"
       DemoTraffic__PaymentsPerMinute: "10"
+      # Lights the tracing seam. In a demo-only run (no observability profile) Tempo doesn't
+      # exist and the exporter drops its batches quietly — telemetry is best-effort by
+      # definition, and the app must never fail because a collector is away. The dev loop
+      # leaves this unset, and the seam stays dormant.
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
     ports:
       - "5080:8080"
     depends_on:
@@ -120,6 +125,15 @@ services:
       loki:
         condition: service_healthy
 
+  tempo:
+    profiles: [observability]
+    image: grafana/tempo:2.8.1
+    container_name: payments-tempo
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    volumes:
+      - ./ops/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempodata:/var/tempo
+
   prometheus:
     profiles: [observability]
     image: prom/prometheus:v3.3.0
@@ -164,3 +178,4 @@ volumes:
   pgdata:
   promdata:
   lokidata:
+  tempodata:

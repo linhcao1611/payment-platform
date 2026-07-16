@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Payments.Api.Demo;
 using Payments.Api.Middleware;
 using Payments.Infrastructure;
@@ -71,6 +73,23 @@ builder.Services.AddHealthChecks()
         builder.Configuration.GetConnectionString("Payments")!,
         name: "postgres",
         tags: ["ready"]);
+
+// Traces stay dormant unless an OTLP endpoint is configured — the observability profile
+// points this at Tempo; the dev loop and tests leave it unset and pay nothing. This is the
+// "seam" the docs describe, and lighting it changes no instrumented code: ASP.NET's request
+// activities and the worker's ActivitySource were already being emitted, just to nobody.
+if (!string.IsNullOrEmpty(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]))
+{
+    builder.Services.AddOpenTelemetry()
+        .ConfigureResource(r => r.AddService("payments-api"))
+        .WithTracing(tracing => tracing
+            // Same rule as the request logs: successful probe/scrape traffic is relentless
+            // and says nothing, so it doesn't earn a span either.
+            .AddAspNetCoreInstrumentation(o =>
+                o.Filter = ctx => !IsInfrastructureEndpoint(ctx.Request.Path))
+            .AddSource(SettlementWorker.ActivitySource.Name)
+            .AddOtlpExporter()); // reads OTEL_EXPORTER_OTLP_ENDPOINT itself
+}
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
