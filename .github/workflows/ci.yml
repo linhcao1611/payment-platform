@@ -1,0 +1,36 @@
+# CI: both suites on every push. The integration tests use Testcontainers, which works on
+# GitHub's hosted runners because Docker is already present — no service containers to
+# declare, the tests own their database the same way they do locally.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Test (domain + integration)
+        run: dotnet test backend --nologo
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - name: Build (tsc + vite)
+        run: npm run build

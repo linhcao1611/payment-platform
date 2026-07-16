@@ -263,6 +263,12 @@ Merchant identity comes from an `X-Merchant-Id` header and **every** query is sc
 Another merchant's payment is a 404, not a 403 — you shouldn't be able to learn that
 someone else's payment id exists.
 
+The API is deliberately unversioned (`/api/payments`, not `/api/v1/payments`): with exactly
+one consumer, which lives in this repo and deploys with it, a version segment is ceremony.
+The moment a first *external* consumer appears, `/v1` goes in — retrofitting a version onto
+an unversioned public API is itself the breaking change versioning exists to prevent, so the
+cheap time to add it is immediately before publication, and the wrong time is after.
+
 ## Tradeoffs made
 
 **A Postgres table as the queue, not a broker.** The capture handler writes a
@@ -383,6 +389,12 @@ two versions racing to migrate.
 **Secrets.** The compose password and connection string are in plain config because they're
 local-only. Real deployment pulls them from a secrets manager into the environment.
 
+**TLS.** Everything here speaks plain HTTP because everything here is localhost. In
+production TLS terminates at the ingress or load balancer and the API keeps listening on
+HTTP inside the network — which is why nothing in the code assumes a scheme. Merchant-facing
+traffic is TLS-only, HSTS on; whether internal hops also get mTLS is a service-mesh decision,
+not an application one.
+
 **Observability wiring.** Metrics are exposed in Prometheus text format at `/metrics` and logs
 as JSON on stdout; the `observability` profile above points a real Grafana/Prometheus/Loki at
 both without touching a line of application code, which is the property that matters. Traces
@@ -469,6 +481,9 @@ guarantee (no field to leak) rather than log scrubbing.
   contention and `xmin` concurrency are all Postgres behaviour, and they're the only things
   worth testing at that level. The two concurrency tests fire eight racing requests at one
   idempotency key and assert exactly one did the work.
+- **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs both suites on every
+  push: the full backend test run — Testcontainers works on GitHub's hosted runners because
+  Docker is already there — plus the frontend's lint and type-checked build.
 - **Deliberately skipped:** contract tests (one consumer, and it lives in this repo), load
   tests (they'd earn their keep once the connection-per-in-flight-payment tradeoff above
   starts to bite), and browser E2E (the dashboard is thin enough that the integration tests
