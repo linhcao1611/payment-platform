@@ -7,6 +7,26 @@ see [docs/PLAN.md](docs/PLAN.md) for the implementation plan.
 The brief asks for judgment rather than feature count, so this README spends most of its
 words on **why** things are the way they are, and on what is deliberately missing.
 
+## Scope — where the depth went
+
+One payment flow, taken seriously end to end: create → authorize → capture → async settle →
+refund. The failure modes are treated as the feature — client retries, concurrent duplicates,
+crashed workers, refunds racing settlement, jobs that will never succeed — and each one has
+tests, several of which were verified by mutation (break the mechanism, watch exactly the
+right tests fail). The plan fixed this shape before any code was written: depth over breadth,
+one clean vertical slice with a strong operational narrative.
+
+Deliberately **not** built, each with its production path documented below: partial and
+multiple captures/refunds, multi-currency, real authentication (a header stub), a real
+acquirer (a simulated gateway), broker infrastructure (a transactional outbox instead),
+webhooks, automatic dead-letter replay.
+
+Everything in the repo beyond that slice exists to make its depth *observable*, not to widen
+it: the demo profile seeds history and drives real traffic so the dashboard and metrics show
+true numbers, and the observability profile points a real Grafana/Prometheus/Loki at the
+seams to prove they are seams. Both are optional compose profiles; the core neither knows nor
+cares whether they're running.
+
 ## Run it
 
 ### The whole stack, one command (only Docker needed)
