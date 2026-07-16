@@ -69,6 +69,14 @@ public sealed class DemoDataSeeder(
         using var scope = scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
 
+        // The AnyAsync guard alone races: two API instances starting against one empty
+        // database (docker compose --scale api=2) would both pass the check and both seed.
+        // A transaction-scoped advisory lock serialises check-and-seed across instances —
+        // the loser blocks here, then sees the winner's rows and skips. The lock id is
+        // arbitrary; it just has to be the same constant everywhere this lock is meant.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(20260715);", ct);
+
         if (await db.Payments.AnyAsync(ct))
         {
             logger.LogInformation("Demo seed skipped: payments already exist.");
@@ -102,6 +110,7 @@ public sealed class DemoDataSeeder(
         }
 
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct); // releases the advisory lock with the transaction
 
         logger.LogInformation(
             "Demo seed inserted {Count} payments across {Days} days ({Breakdown}) and {Jobs} settlement jobs.",

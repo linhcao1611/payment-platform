@@ -88,14 +88,17 @@ public sealed class SettlementQueue(PaymentsDbContext db) : ISettlementQueue
     public Task SaveAsync(CancellationToken ct) => db.SaveChangesAsync(ct);
 
     /// <summary>
-    /// One grouped scan plus one min(), rather than three counts. The index on
-    /// (status, next_attempt_at) covers it, and at exercise volumes this is noise next to
-    /// the claim itself — but the shape matters: a metrics query that table-scans on every
-    /// scrape is a classic way for observability to become the outage.
+    /// Reads only the live statuses. Terminal rows (Succeeded/Cancelled) accumulate forever —
+    /// thousands a day under real traffic — and this runs on every worker poll, so grouping
+    /// over the whole table would make the query O(all jobs ever): the queue-depth metric
+    /// slowly becoming the queue's biggest customer is a classic way for observability to
+    /// become the outage. Filtered to Pending and Dead, the (status, next_attempt_at) index
+    /// covers it and the row count is bounded by the backlog, not by history.
     /// </summary>
     public async Task<SettlementQueueStats> GetStatsAsync(DateTimeOffset now, CancellationToken ct)
     {
         var counts = await db.SettlementJobs
+            .Where(j => j.Status == SettlementJobStatus.Pending || j.Status == SettlementJobStatus.Dead)
             .GroupBy(j => j.Status)
             .Select(g => new { Status = g.Key, Count = g.Count() })
             .ToListAsync(ct);

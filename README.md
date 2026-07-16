@@ -281,11 +281,16 @@ key can never be consumed without its side effects landing, or vice versa. A con
 duplicate blocks on the key's unique index until the first request commits and then replays
 it — which means no in-flight state is ever observable and there is no reservation lease to
 expire and reclaim.
-*Given up:* the gateway round trip happens with a transaction open, which under real acquirer
-latency pins a pooled connection per in-flight payment. The alternative (commit the
-reservation first, then work) frees the connection but needs lease/expiry logic to recover
-keys stranded by a crash. At this scale the simpler, always-consistent option wins; at real
-throughput the connection cost would force the other one.
+*Given up:* the gateway round trip happens with a transaction open, and the real cost is
+worse than one pinned connection per in-flight payment — **each blocked duplicate holds a
+connection too**. Play out the exact scenario idempotency exists for: the acquirer browns out
+to 30s latency and a client retries every 5s. One payment is now the original's connection
+plus ~6 blocked duplicates; at Npgsql's default pool of 100, roughly fourteen concurrent slow
+payments exhaust the pool and *everything* fails, reads and readiness checks included. A
+partner brownout becomes a full outage. The alternative (commit the reservation first, then
+work) frees the connections but needs lease/expiry logic to recover keys stranded by a crash.
+At this scale the simpler, always-consistent option wins; at real throughput the retry-storm
+multiplier — not the single pinned connection — is what forces the other design.
 
 **Failures don't burn an idempotency key.** If the work throws, the reservation rolls back
 with it, so only responses actually returned are replayable and a client can retry a failed
@@ -385,17 +390,34 @@ use `ActivitySource` with no exporter registered — adding an OTLP exporter is 
 one-config-change. The default stack ships seams, not a monitoring platform, because the seams
 are the part that has to be right.
 
-**Idempotency keys are never swept.** The table grows forever. Production needs a TTL job
-(24h is typical) and an index on `created_at` to support it.
+**Idempotency keys are never swept, and neither are settlement jobs.** Both tables grow
+forever. Keys need a TTL job (24h is typical) and an index on `created_at`; terminal
+settlement jobs (`Succeeded`/`Cancelled`) need archival for the same reason — the queue's
+health queries should only ever have to look at the handful of live rows, not a year of
+history. The stats query already filters to the live statuses so the metric doesn't become
+the queue's biggest customer; archival is what keeps the table itself honest.
+
+**Gateway calls have no timeout budget or circuit breaker.** The in-process fake hides it,
+but a real acquirer is a network partner: production wraps `IPaymentGateway` in per-call
+timeouts and a circuit breaker (Polly), and the idempotency keys on both sides are what make
+those timeouts safe to take.
+
+**`/metrics` is publicly proxied in the demo.** Convenient locally; in production the metrics
+endpoint is scraped from inside the network, not exposed through the front door. Likewise the
+custom `X-Correlation-Id` would fold into W3C trace context (`traceparent`) — the logs already
+carry `@tr` — rather than running two tracing systems side by side.
 
 **Dead-letter runbook.** A dead job leaves the payment `Captured` and visible in
 `settlement_dead_jobs`. There is deliberately no automatic replay — an operator should
 understand *why* five attempts failed before money moves. Alert on the gauge, not the
 counter: counters reset on restart and a real backlog would vanish with one.
 
-**Horizontal scaling.** The API is stateless. The worker is already safe to run N-up because
-`SKIP LOCKED` hands each job to exactly one claimer; the queue-depth gauge is the signal for
-when to add instances.
+**Horizontal scaling.** The API is stateless, and everything that arbitrates a race does it
+in the database — the idempotency unique index, `xmin` on payments, `SKIP LOCKED` on the
+queue — so N API instances and N workers are safe without any coordination service. The demo
+services are the deliberate exception: the seeder serialises itself with an advisory lock so
+two instances can't double-seed an empty database, and running N traffic generators simply
+multiplies the load.
 
 **PCI scope.** Card data never touching the platform is what keeps scope near zero. In
 production that means a tokenization provider or network tokens — the same structural
@@ -459,12 +481,26 @@ In the order I'd actually do them:
 1. **Gateway-side idempotency key on authorization** — closes the orphaned-authorization
    window described above, the same way settlement is already closed. The only known
    correctness gap, and the reason it's first.
-2. **Idempotency key TTL sweep** — the table grows unbounded.
-3. **Partial and multiple captures/refunds** — the real shape of the domain; the aggregate
+2. **Split `Refund` into `Void` and `Refund`.** Reversing before settlement is an
+   auth-reversal — the money never moved; after settlement it's a true refund — the money
+   moves back. Today both are `Refunded`, and the only trace of the difference is the worker
+   cancelling the moot settlement job. They're different gateway calls with different failure
+   modes, so the state machine should name them. Related: **authorizations should expire** —
+   real card auths die in about seven days, and abandoned `Authorized` payments currently sit
+   forever with no sweep to an expired state.
+3. **Webhooks.** The platform records everything and tells no one — a merchant discovers
+   settlement by polling. The fix is the settlement outbox pattern a second time: an event row
+   written in the same transaction as the state change, a dispatcher with retries, backoff and
+   dead-lettering, idempotent delivery keyed by event id. That `settlement_jobs` is a
+   specialization of a pattern that generalizes this cleanly is the strongest evidence the
+   original choice was right.
+4. **Retention: idempotency-key TTL sweep and settlement-job archival** — both tables grow
+   unbounded.
+5. **Partial and multiple captures/refunds** — the real shape of the domain; the aggregate
    would carry amounts per operation rather than a single status.
-4. **Reconciliation against the acquirer** — a daily job comparing settled payments to the
+6. **Reconciliation against the acquirer** — a daily job comparing settled payments to the
    gateway's report. In a real system this, not the retry logic, is what catches the money
    that actually went missing.
-5. **LISTEN/NOTIFY or a broker relay** — removes the polling latency floor once it matters.
-6. **Outbox → broker migration** — when settlement needs to scale independently or fan out
+7. **LISTEN/NOTIFY or a broker relay** — removes the polling latency floor once it matters.
+8. **Outbox → broker migration** — when settlement needs to scale independently or fan out
    to other consumers.
