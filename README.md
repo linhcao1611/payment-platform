@@ -481,13 +481,20 @@ guarantee (no field to leak) rather than log scrubbing.
   contention and `xmin` concurrency are all Postgres behaviour, and they're the only things
   worth testing at that level. The two concurrency tests fire eight racing requests at one
   idempotency key and assert exactly one did the work.
-- **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs both suites on every
-  push: the full backend test run — Testcontainers works on GitHub's hosted runners because
-  Docker is already there — plus the frontend's lint and type-checked build.
+- **Frontend tests** (Vitest + Testing Library, `npm test`) cover the money-adjacent logic
+  rather than pixels. The one that matters drives the real detail component through a mocked
+  network failure and asserts on the idempotency keys that actually went over the wire: a
+  retry of the same attempt reuses the key — that's what lets the server replay instead of
+  capturing twice — and a new attempt gets a fresh one. Around it: the never-retry-4xx
+  policy, the date-boundary widening that once 500'd the API, and the timeline's
+  "same request" tagging that makes the async settlement visibly caused by its capture.
+- **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs everything on every
+  push: the full backend suite — Testcontainers works on GitHub's hosted runners because
+  Docker is already there — and the frontend's lint, tests and type-checked build.
 - **Deliberately skipped:** contract tests (one consumer, and it lives in this repo), load
   tests (they'd earn their keep once the connection-per-in-flight-payment tradeoff above
-  starts to bite), and browser E2E (the dashboard is thin enough that the integration tests
-  cover the logic worth protecting).
+  starts to bite), and browser E2E — the component tests above exercise the behaviour worth
+  protecting without a browser to babysit.
 
 ## Areas for future improvement
 

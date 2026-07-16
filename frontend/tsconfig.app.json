@@ -22,5 +22,8 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Test files import vitest; the production build's tsc must not try to check them.
+  // Vitest type-checks nothing at runtime anyway (esbuild) — the editor still covers tests.
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }
