@@ -90,7 +90,9 @@ docker compose --profile demo --profile observability up --build
 - **Grafana: http://localhost:3000** — opens straight on the *Payments — overview* dashboard,
   no login (anonymous admin; local demo only)
 - Prometheus: http://localhost:9090
-- Traces: Tempo, inside Grafana (Explore → Tempo, or click the **TraceID** button on any log
+- Traces: Tempo, inside Grafana (**Drilldown → Traces** for the span-rate/duration overview —
+  the app is installed at startup since 11.6 doesn't bundle it — or Explore → Tempo, or click
+  the **TraceID** button on any log
   line) — request waterfalls plus the worker's `settle-payment` spans
 
 Everything is provisioned: datasources, the dashboard, the scrape config. The dashboard has

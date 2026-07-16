@@ -161,6 +161,10 @@ services:
       # anywhere real.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      # Traces Drilldown isn't bundled with Grafana 11.6 (Logs and Profiles are), so it's
+      # installed at container start. Costs one small download from the plugin catalog on
+      # each grafana recreate — the same internet the image pulls already need.
+      GF_INSTALL_PLUGINS: grafana-exploretraces-app
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
       GF_USERS_DEFAULT_THEME: light
       # Land straight on the dashboard rather than Grafana's welcome page.

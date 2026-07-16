@@ -18,5 +18,21 @@ storage:
     wal:
       path: /var/tempo/wal
 
+# Traces Drilldown (and any TraceQL metrics query, e.g. `{} | rate()`) computes RED from the
+# spans themselves, which requires the local-blocks processor. Without it the Drilldown app
+# renders empty panels against a Tempo that is otherwise perfectly healthy.
+metrics_generator:
+  # storage.path is mandatory to enable the module at all — omit it and Tempo silently
+  # disables the generator ("empty ring") even though the processor below is configured.
+  storage:
+    path: /var/tempo/generator/wal
+  traces_storage:
+    path: /var/tempo/generator/traces
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [local-blocks]
+
 usage_report:
   reporting_enabled: false
