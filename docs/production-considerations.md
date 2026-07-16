@@ -32,9 +32,13 @@ not an application one.
 as JSON on stdout; the `observability` compose profile (see the README’s *Run it* section) points a real
 Grafana/Prometheus/Loki at
 both without touching a line of application code, which is the property that matters. Traces
-use `ActivitySource` with no exporter registered — adding an OTLP exporter is the same kind of
-one-config-change. The default stack ships seams, not a monitoring platform, because the seams
-are the part that has to be right.
+use `ActivitySource` with no exporter registered. Wiring real spans is a small, well-known
+change — three OpenTelemetry packages and about a dozen lines in `Program.cs` registering the
+`Payments.Worker` source alongside the ASP.NET one, plus a Tempo or Jaeger container to send
+them to — not literally one line of config, and the docs shouldn't pretend otherwise. The
+point stands, though: it's additive wiring at the composition root; no instrumented code
+changes. The default stack ships seams, not a monitoring platform, because the seams are the
+part that has to be right.
 
 **Idempotency keys are never swept, and neither are settlement jobs.** Both tables grow
 forever. Keys need a TTL job (24h is typical) and an index on `created_at`; terminal
