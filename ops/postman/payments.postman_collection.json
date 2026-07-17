@@ -1,0 +1,700 @@
+{
+  "info": {
+    "_postman_id": "914ae421-462a-47eb-8bfb-98ca1e216a65",
+    "name": "Payments API",
+    "description": "Exercises the Payments API against a running stack (`docker compose --profile demo up --build`, or the dev loop on :5080). Folders 1-3 build on each other's saved variables and are meant to be run top-to-bottom with Postman's Collection Runner. Folder 4 is a bonus concurrency demo. Folders 5-6 are standalone.\n\nSet `merchantId` in the collection variables to whatever you like — it just needs to be consistent across a run.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5080" },
+    { "key": "merchantId", "value": "acme-demo" },
+    { "key": "lastPaymentId", "value": "" },
+    { "key": "lastAuthorizedPaymentId", "value": "" },
+    { "key": "lastCapturedPaymentId", "value": "" },
+    { "key": "replayKey", "value": "" },
+    { "key": "replayFirstBody", "value": "" },
+    { "key": "conflictKey", "value": "" },
+    { "key": "raceOkCount", "value": "" },
+    { "key": "raceReplayedCount", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1 - Payments (happy path)",
+      "description": "Run in order. Create → Capture → Refund carries state forward via collection variables. In the demo compose profile authorization is pinned to always approve, so 'Create Payment' always yields Authorized; outside that profile it declines ~15% of the time, so re-run it if lastAuthorizedPaymentId ends up empty.",
+      "item": [
+        {
+          "name": "Create Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\":4200,\"currency\":\"USD\",\"cardToken\":\"tok_visa\",\"cardLast4\":\"4242\",\"cardBrand\":\"visa\",\"description\":\"Postman demo payment\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/payments"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.collectionVariables.set(\"lastPaymentId\", json.id);",
+                  "if (json.status === \"Authorized\") {",
+                  "    pm.collectionVariables.set(\"lastAuthorizedPaymentId\", json.id);",
+                  "}",
+                  "",
+                  "pm.test(\"Response has an id\", function () {",
+                  "    pm.expect(json.id).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Payment",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" }
+            ],
+            "url": "{{baseUrl}}/api/payments/{{lastPaymentId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Returned payment matches lastPaymentId\", function () {",
+                  "    pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get(\"lastPaymentId\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Payments",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" }
+            ],
+            "url": "{{baseUrl}}/api/payments?page=1&pageSize=20"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Response is paged\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json).to.have.property(\"items\");",
+                  "    pm.expect(json).to.have.property(\"totalCount\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Payment Transitions",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" }
+            ],
+            "url": "{{baseUrl}}/api/payments/{{lastPaymentId}}/transitions"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"At least one transition recorded\", function () {",
+                  "    pm.expect(pm.response.json().length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Capture Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "url": "{{baseUrl}}/api/payments/{{lastAuthorizedPaymentId}}/capture"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"Payment is Captured\", function () {",
+                  "    pm.expect(json.status).to.eql(\"Captured\");",
+                  "});",
+                  "pm.collectionVariables.set(\"lastCapturedPaymentId\", json.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refund Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"reason\":\"customer requested\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/payments/{{lastCapturedPaymentId}}/refund"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Payment is Refunded\", function () {",
+                  "    pm.expect(pm.response.json().status).to.eql(\"Refunded\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Payment (deterministic decline)",
+          "description": "cardToken ending in '-declined' always declines, regardless of FakeGateway:AuthorizeDeclineRate — a deterministic hook for demos, per FakePaymentGateway.AuthorizeAsync.",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\":1500,\"currency\":\"USD\",\"cardToken\":\"tok_test-declined\",\"cardLast4\":\"0002\",\"cardBrand\":\"visa\",\"description\":\"Deterministic decline demo\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/payments"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201 (the payment record is still created)\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Payment status is Failed\", function () {",
+                  "    pm.expect(pm.response.json().status).to.eql(\"Failed\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 - Idempotency: replay",
+      "description": "Same Idempotency-Key, byte-identical body, sent twice. Step 1 reserves the key and does the work; Step 2 must get back the exact same response instead of creating a second payment.",
+      "item": [
+        {
+          "name": "Step 1 - Create (original)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" },
+              { "key": "Idempotency-Key", "value": "{{replayKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\":4200,\"currency\":\"USD\",\"cardToken\":\"tok_visa\",\"cardLast4\":\"4242\",\"cardBrand\":\"visa\",\"description\":\"replay demo\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/payments"
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"replayKey\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Not marked as a replay\", function () {",
+                  "    pm.expect(pm.response.headers.has(\"Idempotency-Replayed\")).to.eql(false);",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set(\"replayFirstBody\", pm.response.text());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Step 2 - Replay (same key, same body)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" },
+              { "key": "Idempotency-Key", "value": "{{replayKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\":4200,\"currency\":\"USD\",\"cardToken\":\"tok_visa\",\"cardLast4\":\"4242\",\"cardBrand\":\"visa\",\"description\":\"replay demo\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/payments"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201 (replayed, not a new payment)\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Marked as a replay\", function () {",
+                  "    pm.expect(pm.response.headers.get(\"Idempotency-Replayed\")).to.eql(\"true\");",
+                  "});",
+                  "",
+                  "pm.test(\"Response body is byte-identical to the original\", function () {",
+                  "    pm.expect(pm.response.text()).to.eql(pm.collectionVariables.get(\"replayFirstBody\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 - Idempotency: conflict",
+      "description": "Same Idempotency-Key reused with a DIFFERENT payload — always a client bug, and the API rejects it with 409 rather than silently doing (or replaying) the wrong thing.",
+      "item": [
+        {
+          "name": "Step 1 - Create (original payload)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" },
+              { "key": "Idempotency-Key", "value": "{{conflictKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\":4200,\"currency\":\"USD\",\"cardToken\":\"tok_visa\",\"cardLast4\":\"4242\",\"cardBrand\":\"visa\",\"description\":\"conflict demo\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/payments"
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"conflictKey\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Step 2 - Reuse key, different payload (expect 409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" },
+              { "key": "Idempotency-Key", "value": "{{conflictKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\":9999,\"currency\":\"USD\",\"cardToken\":\"tok_visa\",\"cardLast4\":\"4242\",\"cardBrand\":\"visa\",\"description\":\"conflict demo - different amount\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/payments"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 409\", function () {",
+                  "    pm.response.to.have.status(409);",
+                  "});",
+                  "",
+                  "pm.test(\"errorCode is idempotency_conflict\", function () {",
+                  "    pm.expect(pm.response.json().errorCode).to.eql(\"idempotency_conflict\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4 - Idempotency: concurrent race (bonus)",
+      "description": "Fires 8 concurrent creates sharing one Idempotency-Key from the pre-request script, mirroring the backend's own Concurrent_creates_with_one_key_produce_exactly_one_payment test.",
+      "item": [
+        {
+          "name": "Fire 8 concurrent creates with one key",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/healthz",
+            "description": "The real work happens in the pre-request script below; this request is just a carrier so the test script has somewhere to assert from."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const key = pm.variables.replaceIn(\"{{$guid}}\");",
+                  "pm.collectionVariables.set(\"raceKey\", key);",
+                  "",
+                  "const body = JSON.stringify({",
+                  "    amountMinor: 4200,",
+                  "    currency: \"USD\",",
+                  "    cardToken: \"tok_visa\",",
+                  "    cardLast4: \"4242\",",
+                  "    cardBrand: \"visa\",",
+                  "    description: \"race demo\"",
+                  "});",
+                  "",
+                  "// Callback-counting rather than async/await: the sandbox tracks pending",
+                  "// pm.sendRequest calls and won't send the carrier request below until every",
+                  "// callback here has fired, which works across old and new Postman/Newman",
+                  "// alike - unlike top-level await, which isn't universally supported.",
+                  "var total = 8;",
+                  "var done = 0;",
+                  "var okCount = 0;",
+                  "var replayedCount = 0;",
+                  "",
+                  "for (var i = 0; i < total; i++) {",
+                  "    pm.sendRequest({",
+                  "        url: pm.collectionVariables.get(\"baseUrl\") + \"/api/payments\",",
+                  "        method: \"POST\",",
+                  "        header: {",
+                  "            \"Content-Type\": \"application/json\",",
+                  "            \"X-Merchant-Id\": pm.collectionVariables.get(\"merchantId\"),",
+                  "            \"Idempotency-Key\": key",
+                  "        },",
+                  "        body: { mode: \"raw\", raw: body }",
+                  "    }, function (err, res) {",
+                  "        done++;",
+                  "        if (res && res.code === 201) okCount++;",
+                  "        if (res && res.headers.has(\"Idempotency-Replayed\")) replayedCount++;",
+                  "        if (done === total) {",
+                  "            pm.collectionVariables.set(\"raceOkCount\", okCount);",
+                  "            pm.collectionVariables.set(\"raceReplayedCount\", replayedCount);",
+                  "        }",
+                  "    });",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"All 8 concurrent creates returned 201\", function () {",
+                  "    pm.expect(pm.collectionVariables.get(\"raceOkCount\")).to.eql(8);",
+                  "});",
+                  "",
+                  "pm.test(\"Exactly 7 of 8 were replays - only one did the work\", function () {",
+                  "    pm.expect(pm.collectionVariables.get(\"raceReplayedCount\")).to.eql(7);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5 - Error cases",
+      "item": [
+        {
+          "name": "Missing merchant header",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\":4200,\"currency\":\"USD\",\"cardToken\":\"tok_visa\",\"cardLast4\":\"4242\",\"cardBrand\":\"visa\",\"description\":\"missing merchant\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/payments"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 401\", function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"errorCode is merchant_identity_required\", function () {",
+                  "    pm.expect(pm.response.json().errorCode).to.eql(\"merchant_identity_required\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing idempotency key",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\":4200,\"currency\":\"USD\",\"cardToken\":\"tok_visa\",\"cardLast4\":\"4242\",\"cardBrand\":\"visa\",\"description\":\"missing key\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/payments"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"errorCode is idempotency_key_required\", function () {",
+                  "    pm.expect(pm.response.json().errorCode).to.eql(\"idempotency_key_required\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Payment not found",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" }
+            ],
+            "url": "{{baseUrl}}/api/payments/00000000-0000-0000-0000-000000000000"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"errorCode is payment_not_found\", function () {",
+                  "    pm.expect(pm.response.json().errorCode).to.eql(\"payment_not_found\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid status filter",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Merchant-Id", "value": "{{merchantId}}" }
+            ],
+            "url": "{{baseUrl}}/api/payments?status=bogus"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"errorCode is invalid_status\", function () {",
+                  "    pm.expect(pm.response.json().errorCode).to.eql(\"invalid_status\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6 - Health & metrics",
+      "item": [
+        {
+          "name": "Healthz",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/healthz"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Readyz",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/readyz"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Metrics (idempotency counters exposed)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/metrics"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Exposes idempotency_replays_total\", function () {",
+                  "    pm.expect(pm.response.text()).to.include(\"idempotency_replays_total\");",
+                  "});",
+                  "",
+                  "pm.test(\"Exposes idempotency_conflicts_total\", function () {",
+                  "    pm.expect(pm.response.text()).to.include(\"idempotency_conflicts_total\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
