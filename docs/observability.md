@@ -26,11 +26,13 @@
 - **Metrics:** RED from `UseHttpMetrics()`, plus
   `payments_{created,authorized,failed,captured,refunded,settled}_total`,
   `settlement_attempts_total{outcome}`, `settlement_retries_total`,
-  `settlement_dead_lettered_total`, and the queue gauges `settlement_queue_depth`,
-  `settlement_lag_seconds`, `settlement_dead_jobs`. Label values are bounded to enums and
-  route templates — never ids or gateway error strings, which is how a metrics backend gets
-  taken down by its own instrumentation. Depth and lag are both exposed because depth alone
-  can't distinguish a healthy backlog from a stuck one.
+  `settlement_dead_lettered_total`, the queue gauges `settlement_queue_depth`,
+  `settlement_lag_seconds`, `settlement_dead_jobs`, and `idempotency_replays_total{operation}` /
+  `idempotency_conflicts_total{operation}` — a replay is a client retry served from storage, a
+  conflict is the same key reused with a different payload, which is always a client bug.
+  Label values are bounded to enums and route templates — never ids or gateway error strings,
+  which is how a metrics backend gets taken down by its own instrumentation. Depth and lag are
+  both exposed because depth alone can't distinguish a healthy backlog from a stuck one.
 - **Traces:** an `ActivitySource` span per settlement job, tagged with the payment id and
   correlation id. ASP.NET Core already emits activities for requests; a background loop has
   none unless you make one. Under the observability profile these export to **Tempo** and

@@ -427,13 +427,72 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "Idempotency replays / conflicts per min, by operation",
+      "description": "Replays are retries served from storage — normal client behaviour. Conflicts are a key reused with a different payload, which is always a client bug and worth seeing live rather than only in the error logs.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "payments-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "targets": [
+        {
+          "expr": "sum by (operation) (rate(idempotency_replays_total[1m])) * 60",
+          "legendFormat": "replayed {{operation}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (operation) (rate(idempotency_conflicts_total[1m])) * 60",
+          "legendFormat": "conflict {{operation}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 8,
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "conflict.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
       "type": "row",
       "title": "RED — HTTP",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 27
       }
     },
     {
@@ -448,7 +507,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 20
+        "y": 28
       },
       "targets": [
         {
@@ -485,7 +544,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 20
+        "y": 28
       },
       "targets": [
         {
@@ -522,7 +581,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 20
+        "y": 28
       },
       "targets": [
         {
@@ -619,7 +678,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 36
       }
     },
     {
@@ -634,7 +693,7 @@
         "h": 14,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 37
       },
       "targets": [
         {

@@ -69,4 +69,17 @@ public static class PaymentsMetrics
     /// </summary>
     public static readonly Gauge DeadJobs = Metrics.CreateGauge(
         "settlement_dead_jobs", "Settlement jobs currently in the dead-letter state.");
+
+    /// <summary>Operation is create | capture | refund — the same literal values ExecuteAsync takes.</summary>
+    public static readonly Counter IdempotencyReplays = Metrics.CreateCounter(
+        "idempotency_replays_total", "Requests served from a stored idempotent response.",
+        new CounterConfiguration { LabelNames = ["operation"] });
+
+    /// <summary>
+    /// Same key, different payload — always a client bug, so it's worth seeing live rather
+    /// than only in the error logs the domain exception also produces.
+    /// </summary>
+    public static readonly Counter IdempotencyConflicts = Metrics.CreateCounter(
+        "idempotency_conflicts_total", "Requests reusing an idempotency key with a different payload.",
+        new CounterConfiguration { LabelNames = ["operation"] });
 }

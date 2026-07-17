@@ -1,4 +1,5 @@
 using System.Net;
+using Payments.Infrastructure.Observability;
 
 namespace Payments.Api.Tests;
 
@@ -30,6 +31,7 @@ public class IdempotencyTests(PaymentsApiFixture fixture)
         var api = NewMerchant();
         var key = Guid.NewGuid().ToString();
         var body = PaymentsApiClient.NewPaymentBody(amountMinor: 4200, description: "replay me");
+        var replaysBefore = PaymentsMetrics.IdempotencyReplays.WithLabels("create").Value;
 
         var first = await api.CreateRaw(body, key);
         var firstBody = await first.Content.ReadAsStringAsync();
@@ -47,6 +49,9 @@ public class IdempotencyTests(PaymentsApiFixture fixture)
         Assert.False(first.Headers.Contains("Idempotency-Replayed"));
         Assert.True(second.Headers.Contains("Idempotency-Replayed"));
 
+        // The first request reserved and ran the work; only the second was a replay.
+        Assert.Equal(1, PaymentsMetrics.IdempotencyReplays.WithLabels("create").Value - replaysBefore);
+
         var listed = await api.Http.GetStringAsync("/api/payments");
         Assert.Contains("\"totalCount\":1", listed);
     }
@@ -56,12 +61,14 @@ public class IdempotencyTests(PaymentsApiFixture fixture)
     {
         var api = NewMerchant();
         var key = Guid.NewGuid().ToString();
+        var conflictsBefore = PaymentsMetrics.IdempotencyConflicts.WithLabels("create").Value;
 
         await api.CreateRaw(PaymentsApiClient.NewPaymentBody(amountMinor: 4200), key);
         var response = await api.CreateRaw(PaymentsApiClient.NewPaymentBody(amountMinor: 9999), key);
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("idempotency_conflict", (await PaymentsApiClient.Problem(response)).ErrorCode);
+        Assert.Equal(1, PaymentsMetrics.IdempotencyConflicts.WithLabels("create").Value - conflictsBefore);
     }
 
     [Fact]
@@ -92,6 +99,7 @@ public class IdempotencyTests(PaymentsApiFixture fixture)
         var a = await api.CreateAuthorized();
         var b = await api.CreateAuthorized();
         var key = Guid.NewGuid().ToString();
+        var conflictsBefore = PaymentsMetrics.IdempotencyConflicts.WithLabels("capture").Value;
 
         var capturedA = await api.CaptureRaw(a.Id, key);
         var capturedB = await api.CaptureRaw(b.Id, key);
@@ -103,6 +111,9 @@ public class IdempotencyTests(PaymentsApiFixture fixture)
         Assert.Equal(HttpStatusCode.Conflict, capturedB.StatusCode);
         Assert.Equal("idempotency_conflict", (await PaymentsApiClient.Problem(capturedB)).ErrorCode);
         Assert.Equal("Authorized", (await api.Get(b.Id)).Status);
+
+        // Proves the operation label reads from the stored key, not a hardcoded "create".
+        Assert.Equal(1, PaymentsMetrics.IdempotencyConflicts.WithLabels("capture").Value - conflictsBefore);
     }
 
     [Fact]

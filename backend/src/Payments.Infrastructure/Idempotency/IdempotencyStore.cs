@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Payments.Domain;
 using Payments.Infrastructure.Entities;
+using Payments.Infrastructure.Observability;
 
 namespace Payments.Infrastructure.Idempotency;
 
@@ -111,8 +112,15 @@ public sealed class IdempotencyStore(PaymentsDbContext db, TimeProvider clock) :
             .FirstOrDefaultAsync(
                 k => k.MerchantId == merchantId && k.Operation == operation && k.Key == key, ct);
 
-    private static IdempotentResult Replay(IdempotencyKey stored, string requestHash, string key) =>
-        stored.RequestHash == requestHash
-            ? new IdempotentResult(stored.ResponseStatusCode, stored.ResponseBody, Replayed: true)
-            : throw new IdempotencyConflictException(key);
+    private static IdempotentResult Replay(IdempotencyKey stored, string requestHash, string key)
+    {
+        if (stored.RequestHash != requestHash)
+        {
+            PaymentsMetrics.IdempotencyConflicts.WithLabels(stored.Operation).Inc();
+            throw new IdempotencyConflictException(key);
+        }
+
+        PaymentsMetrics.IdempotencyReplays.WithLabels(stored.Operation).Inc();
+        return new IdempotentResult(stored.ResponseStatusCode, stored.ResponseBody, Replayed: true);
+    }
 }
