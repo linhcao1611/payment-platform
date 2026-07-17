@@ -54,10 +54,17 @@ public sealed class DemoTrafficGenerator(
     IServer server,
     IHostApplicationLifetime lifetime,
     IOptions<DemoTrafficOptions> options,
+    DemoTrafficControl control,
     ILogger<DemoTrafficGenerator> logger) : BackgroundService
 {
     private const string MerchantId = "acme";
     private static readonly Random Random = new();
+
+    /// <summary>
+    /// How often a paused loop re-checks <see cref="DemoTrafficControl.IsPaused"/>. Short
+    /// enough that Resume from the dashboard feels immediate, without a signal/event primitive.
+    /// </summary>
+    private static readonly TimeSpan PausedPollInterval = TimeSpan.FromMilliseconds(250);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -87,6 +94,20 @@ public sealed class DemoTrafficGenerator(
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            if (control.IsPaused)
+            {
+                try
+                {
+                    await Task.Delay(PausedPollInterval, stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+
+                continue;
+            }
+
             try
             {
                 await DriveOnePaymentAsync(http, settings, stoppingToken);

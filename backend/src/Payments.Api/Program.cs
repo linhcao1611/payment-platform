@@ -56,6 +56,7 @@ builder.Services.AddHostedService<DemoDataSeeder>();
 // history. Demo aid; off unless configured on.
 builder.Services.Configure<DemoTrafficOptions>(
     builder.Configuration.GetSection(DemoTrafficOptions.SectionName));
+builder.Services.AddSingleton<DemoTrafficControl>();
 builder.Services.AddHostedService<DemoTrafficGenerator>();
 
 // The settlement worker rides in the API process today. It is a project reference, not a

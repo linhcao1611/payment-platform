@@ -275,6 +275,42 @@ code {
   color: var(--text);
 }
 
+/* ---------- demo traffic toggle ---------- */
+
+.demo-traffic-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.demo-traffic-bar .btn {
+  margin-left: auto;
+  padding: 4px 10px;
+}
+
+.demo-traffic-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--positive-text);
+  flex-shrink: 0;
+}
+
+.demo-traffic-dot-paused {
+  background: var(--progress-text);
+}
+
+.demo-traffic-error {
+  color: var(--negative-text);
+  font-size: 12px;
+}
+
 /* ---------- badges ---------- */
 
 .badge {

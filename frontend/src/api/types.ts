@@ -56,3 +56,9 @@ export interface PaymentListParams {
   page?: number
   pageSize?: number
 }
+
+export interface DemoTrafficStatus {
+  enabled: boolean
+  paused: boolean
+  paymentsPerMinute: number
+}

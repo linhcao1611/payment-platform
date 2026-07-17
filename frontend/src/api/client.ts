@@ -1,4 +1,5 @@
 import type {
+  DemoTrafficStatus,
   PagedResponse,
   PaymentListParams,
   PaymentResponse,
@@ -119,4 +120,20 @@ export function refundPayment(
     },
     body: JSON.stringify({ reason }),
   })
+}
+
+/**
+ * Not merchant data — this controls a demo aid, not a merchant's payments — but it's fine to
+ * route through the same `request` helper; the API ignores the merchant header it carries along.
+ */
+export function getDemoTrafficStatus(signal?: AbortSignal): Promise<DemoTrafficStatus> {
+  return request<DemoTrafficStatus>('/demo/traffic', { signal })
+}
+
+export function pauseDemoTraffic(): Promise<DemoTrafficStatus> {
+  return request<DemoTrafficStatus>('/demo/traffic/pause', { method: 'POST' })
+}
+
+export function resumeDemoTraffic(): Promise<DemoTrafficStatus> {
+  return request<DemoTrafficStatus>('/demo/traffic/resume', { method: 'POST' })
 }

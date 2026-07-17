@@ -1,5 +1,6 @@
 import { PaymentsList } from './components/PaymentsList'
 import { PaymentDetail } from './components/PaymentDetail'
+import { DemoTrafficToggle } from './components/DemoTrafficToggle'
 import { matchPaymentDetail, useRoute } from './lib/useRoute'
 
 export default function App() {
@@ -8,6 +9,7 @@ export default function App() {
 
   return (
     <main className="app">
+      <DemoTrafficToggle />
       {detailId === null ? (
         <PaymentsList onOpen={(id) => navigate(`/payments/${id}`)} />
       ) : (

@@ -81,10 +81,12 @@ public sealed class PaymentsApiFixture : IAsyncLifetime
     /// <see cref="CreateIsolatedDatabaseAsync"/> to control exactly when a worker starts
     /// polling, which the shared hosts can't offer.
     /// </summary>
-    public WebApplicationFactory<Program> CreateHost(string connectionString, bool workerEnabled) =>
-        new PaymentsApiFactory(connectionString, workerEnabled);
+    public WebApplicationFactory<Program> CreateHost(
+        string connectionString, bool workerEnabled, IReadOnlyDictionary<string, string?>? extraConfig = null) =>
+        new PaymentsApiFactory(connectionString, workerEnabled, extraConfig);
 
-    private sealed class PaymentsApiFactory(string connectionString, bool workerEnabled)
+    private sealed class PaymentsApiFactory(
+        string connectionString, bool workerEnabled, IReadOnlyDictionary<string, string?>? extraConfig = null)
         : WebApplicationFactory<Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -93,6 +95,7 @@ public sealed class PaymentsApiFixture : IAsyncLifetime
             builder.UseEnvironment(Environments.Development);
 
             builder.ConfigureAppConfiguration((_, config) =>
+            {
                 config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["ConnectionStrings:Payments"] = connectionString,
@@ -107,7 +110,14 @@ public sealed class PaymentsApiFixture : IAsyncLifetime
 
                     ["Settlement:Enabled"] = workerEnabled ? "true" : "false",
                     ["Settlement:PollInterval"] = "00:00:00.100",
-                }));
+                });
+
+                // Layered on top so a caller can opt into things the defaults above
+                // deliberately leave off (e.g. demo traffic, which tests never enable
+                // unless a test is specifically about it).
+                if (extraConfig is not null)
+                    config.AddInMemoryCollection(extraConfig);
+            });
         }
     }
 }

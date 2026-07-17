@@ -84,16 +84,27 @@ New controller, unauthenticated (this isn't merchant data — no
 - Integration tests on the default (disabled) fixture host:
   - `GET /api/demo/traffic` → `enabled: false`.
   - `POST /pause` and `POST /resume` → `409`, `errorCode: demo_traffic_disabled`.
-- One behavioral integration test on an isolated host
-  (`PaymentsApiFixture.CreateIsolatedDatabaseAsync` + a new host variant with
-  `DemoTraffic:Enabled=true` and a high `PaymentsPerMinute`), following the
-  poll-for-convergence pattern already used in `SettlementTests`: wait for
-  the payment count to grow, pause, confirm it stops growing over a short
-  window, resume, confirm it grows again.
+- Integration tests on an isolated host with `DemoTraffic:Enabled=true`:
+  `GET` reports `enabled: true, paused: false` initially; `POST pause` then
+  `POST resume` round-trip through `paused` on both the mutation's own
+  response and a follow-up `GET`.
   - Requires extending `PaymentsApiFixture.CreateHost` to take an optional
     extra-config dictionary layered on top of the two keys it already sets
     (`workerEnabled` stays a required positional param; the new param is
     optional and defaults to none, so existing call sites are unchanged).
+  - **Revised during implementation:** the originally-planned
+    poll-for-convergence test (start traffic, pause, assert the payment
+    count stops growing, resume, assert it grows again) turned out to be
+    infeasible under `WebApplicationFactory`. `DemoTrafficGenerator` resolves
+    its own base address from `IServerAddressesFeature` to self-call over
+    HTTP, and confirmed by inspection: `TestServer` never populates that
+    feature, so the generator always logs "could not resolve the server
+    address" and never starts inside the test harness — independent of this
+    change, and presumably why the generator itself has never been covered
+    by a test. The tests above instead prove the endpoints and
+    `DemoTrafficControl` agree on state, which is everything the tests *can*
+    reach; the generator's actual on/off behavior is verified by hand
+    against the real compose stack.
 - No new frontend automated tests — verified by running the dev server and
   exercising the toggle in a browser, per the project's existing practice
   for UI changes.
