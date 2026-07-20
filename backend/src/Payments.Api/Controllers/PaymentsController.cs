@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -121,6 +122,11 @@ public sealed class PaymentsController(
                 ? PaymentsMetrics.Authorized
                 : PaymentsMetrics.Failed).Inc();
 
+            // Same tag keys SettlementWorker already puts on its settle-payment span, so one
+            // TraceQL query finds every trace touching this payment, not just settlement's.
+            Activity.Current?.SetTag("payment.id", created.Id);
+            Activity.Current?.SetTag("correlation.id", correlationId);
+
             Response.Headers.Location = Url.Action(nameof(Get), new { id = created.Id });
         }
 
@@ -148,6 +154,11 @@ public sealed class PaymentsController(
 
         var correlationId = CorrelationIdMiddleware.Get(HttpContext);
         var actor = $"merchant:{merchantId}";
+
+        // Unlike Create, id is a route parameter here - known up front regardless of whether
+        // this turns out to be a replay, so there's no reason to skip tagging on one.
+        Activity.Current?.SetTag("payment.id", id);
+        Activity.Current?.SetTag("correlation.id", correlationId);
 
         var result = await idempotency.ExecuteAsync(
             merchantId, "capture", key,
@@ -192,6 +203,9 @@ public sealed class PaymentsController(
         var correlationId = CorrelationIdMiddleware.Get(HttpContext);
         var actor = $"merchant:{merchantId}";
         var reason = request?.Reason;
+
+        Activity.Current?.SetTag("payment.id", id);
+        Activity.Current?.SetTag("correlation.id", correlationId);
 
         var result = await idempotency.ExecuteAsync(
             merchantId, "refund", key,

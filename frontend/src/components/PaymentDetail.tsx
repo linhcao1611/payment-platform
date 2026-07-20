@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { capturePayment, getPayment, getTransitions, refundPayment } from '../api/client'
 import type { PaymentResponse } from '../api/types'
 import { formatAmount, formatCard, formatDateTime } from '../lib/format'
+import { tempoTraceUrl } from '../lib/tempo'
 import { retryTransportOnly } from '../lib/retry'
 import { StatusBadge } from './StatusBadge'
 import { Timeline } from './Timeline'
@@ -140,6 +141,14 @@ export function PaymentDetail({ id, onBack }: { id: string; onBack: () => void }
               <div>
                 <dt>Updated</dt>
                 <dd>{formatDateTime(payment.updatedAt)}</dd>
+              </div>
+              <div>
+                <dt>Trace</dt>
+                <dd>
+                  <a href={tempoTraceUrl(payment.id)} target="_blank" rel="noreferrer">
+                    View in Tempo →
+                  </a>
+                </dd>
               </div>
             </dl>
 
