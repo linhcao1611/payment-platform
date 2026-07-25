@@ -92,6 +92,34 @@ if (!string.IsNullOrEmpty(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]))
             .AddOtlpExporter()); // reads OTEL_EXPORTER_OTLP_ENDPOINT itself
 }
 
+// Off unless configured, and deliberately so. The compose deployment serves the dashboard and
+// the API from one origin through nginx, so it needs no CORS and shouldn't acquire a relaxed
+// policy it never asked for. The LocalStack deployment puts the dashboard on an S3 website and
+// the API behind API Gateway — genuinely different origins — and sets this.
+//
+// The origin list is read inside the policy callback rather than here, because this line runs
+// before the host is built and configuration sources added later — which is exactly what the
+// integration tests do — would be invisible to an eager read. Registering the service is
+// harmless on its own; nothing applies CORS unless UseCors is also called below.
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
+{
+    var origins = CorsOrigins(builder.Configuration);
+    if (origins.Length == 0)
+        return;
+
+    policy.WithOrigins(origins)
+        // The dashboard sends X-Merchant-Id and Idempotency-Key, and POSTs to capture and
+        // refund. Credentials are deliberately not allowed: this API takes identity from a
+        // header, not a cookie, so there is nothing for the browser to attach.
+        .AllowAnyHeader()
+        .AllowAnyMethod();
+}));
+
+static string[] CorsOrigins(IConfiguration configuration) =>
+    configuration["Cors:AllowedOrigins"]
+        ?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    ?? [];
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -149,6 +177,13 @@ if (app.Environment.IsDevelopment())
     // Development because that is exactly where Swagger is mounted; in production an
     // unmapped root correctly stays a 404.
     app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
+}
+
+// Read from the built app's configuration, so it reflects every source the host ended up with
+// rather than only those present when the builder was first constructed.
+if (CorsOrigins(app.Configuration).Length > 0)
+{
+    app.UseCors();
 }
 
 app.MapControllers();
