@@ -19,3 +19,10 @@ dist/
 # Local env
 *.env
 appsettings.*.Local.json
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
