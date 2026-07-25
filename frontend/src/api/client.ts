@@ -9,7 +9,13 @@ import type {
 
 // Auth stub: the exercise scopes every request to a single merchant via header.
 const MERCHANT_ID = 'acme'
-const BASE_URL = '/api'
+
+// Empty by default, which keeps the relative `/api` path that both existing paths rely on:
+// nginx proxies it under compose, Vite proxies it under `npm run dev`. The LocalStack deploy
+// serves the dashboard from an S3 website, where there is no proxy in front of it, so
+// Terraform builds with VITE_API_BASE set to the API Gateway stage URL and this same code
+// reaches across origins instead.
+const BASE_URL = `${import.meta.env.VITE_API_BASE ?? ''}/api`
 
 /**
  * An API failure carrying the parsed problem+json body, so callers can show the
